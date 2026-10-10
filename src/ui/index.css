@@ -1,61 +1,62 @@
 @import "tailwindcss";
+@import "./styles/vendor/angus-theming/angus_colors.css";
 @import "highlight.js/styles/github.css";
 @import "highlight.js/styles/github-dark.css" (prefers-color-scheme: dark);
 
 @theme {
-  --color-brand: #0606ac;
-  --color-brand-content: #fafafa;
-  --color-brand-hover: #4a4a8c;
-  --color-brand-light: #f5f5ff;
-  --color-brand-light-content: #0606ac;
+  --color-brand: var(--color-angus-standard-light-primary);
+  --color-brand-content: var(--color-angus-standard-light-on-primary);
+  --color-brand-hover: var(--color-angus-standard-light-tertiary);
+  --color-brand-light: var(--color-angus-standard-light-primary-container);
+  --color-brand-light-content: var(--color-angus-standard-light-on-primary-container);
   
   /* Surface colors */
-  --color-surface: #ffffff;
-  --color-surface-secondary: #fafafa;
-  --color-surface-tertiary: #f5f5f5;
-  --color-surface-hover: #fafafa;
+  --color-surface: var(--color-angus-standard-light-surface);
+  --color-surface-secondary: var(--color-angus-standard-light-surface-variant);
+  --color-surface-tertiary: var(--color-angus-standard-light-surface-variant);
+  --color-surface-hover: var(--color-angus-standard-light-surface-variant);
   
   /* Text colors */
-  --color-ink-900: #141414;
-  --color-ink-800: #474747;
-  --color-ink-700: #474747;
-  --color-ink-600: #737373;
-  --color-ink-500: #8c8c8c;
-  --color-ink-400: #a6a6a6;
+  --color-ink-900: var(--color-angus-standard-light-on-background);
+  --color-ink-800: var(--color-angus-standard-light-on-surface);
+  --color-ink-700: var(--color-angus-standard-light-on-surface);
+  --color-ink-600: var(--color-angus-standard-light-on-surface-variant);
+  --color-ink-500: var(--color-angus-standard-light-outline);
+  --color-ink-400: var(--color-angus-standard-light-outline-variant);
   
   /* Muted colors */
   --color-muted: #9ca3af;
   --color-muted-light: #a6a6a6;
   
   /* Accent colors */
-  --color-accent: #0606ac;
-  --color-accent-hover: #4a4a8c;
-  --color-accent-light: #f5f5ff;
-  --color-accent-subtle: #ebebf5;
+  --color-accent: var(--color-angus-standard-light-primary);
+  --color-accent-hover: var(--color-angus-standard-light-tertiary);
+  --color-accent-light: var(--color-angus-standard-light-primary-container);
+  --color-accent-subtle: var(--color-angus-standard-light-secondary-container);
   
   /* Status colors */
-  --color-error: #c41952;
-  --color-error-light: #fdf2f5;
+  --color-error: var(--color-angus-standard-light-error);
+  --color-error-light: var(--color-angus-standard-light-error-container);
   --color-success: #16a34a;
   --color-success-light: #f0fdf4;
-  --color-info: #0606ac;
-  --color-info-light: #f5f5ff;
+  --color-info: var(--color-angus-standard-light-tertiary);
+  --color-info-light: var(--color-angus-standard-light-tertiary-container);
   --color-warning: #b87800;
   --color-warning-light: #fffbeb;
   
   /* Background colors */
-  --color-bg-000: #ffffff;
-  --color-bg-100: #fafafa;
-  --color-bg-200: #f5f5f5;
-  --color-bg-300: #e8e8e8;
-  --color-bg-400: #d9d9d9;
+  --color-bg-000: var(--color-angus-standard-light-background);
+  --color-bg-100: var(--color-angus-standard-light-surface);
+  --color-bg-200: var(--color-angus-standard-light-surface-variant);
+  --color-bg-300: var(--color-angus-standard-light-outline-variant);
+  --color-bg-400: var(--color-angus-standard-light-outline);
   
   /* Border */
-  --color-border: #e8e8e8;
-  --color-border-hover: #c7c7e8;
+  --color-border: var(--color-angus-standard-light-outline-variant);
+  --color-border-hover: var(--color-angus-standard-light-outline);
   
   /* Sidebar - neutral gray */
-  --color-sidebar: #f5f5f5;
+  --color-sidebar: var(--color-angus-standard-light-surface-variant);
   
   /* Shadows */
   --shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.05);

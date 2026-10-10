@@ -1,0 +1,175 @@
+/* Vendored from: angus-software-theming (git.angussoftware.dev/angus-bot/angus-software-theming)
+   Source: generated/angus_colors.css (AUTO-GENERATED — do not edit manually)
+   Sync manually when upstream tokens change — theming repo is not an npm package. */
+/* AUTO-GENERATED from angus-tokens.json — do not edit manually. */
+/* Regenerate with: python3 scripts/generate_css.py */
+
+:root {
+    --color-angus-standard-light-primary: #006A6A;
+    --color-angus-standard-light-on-primary: #FFFFFF;
+    --color-angus-standard-light-primary-container: #9CF1F0;
+    --color-angus-standard-light-on-primary-container: #004F50;
+    --color-angus-standard-light-secondary: #006A6A;
+    --color-angus-standard-light-on-secondary: #FFFFFF;
+    --color-angus-standard-light-secondary-container: #9CF1F1;
+    --color-angus-standard-light-on-secondary-container: #004F50;
+    --color-angus-standard-light-tertiary: #36618E;
+    --color-angus-standard-light-on-tertiary: #FFFFFF;
+    --color-angus-standard-light-tertiary-container: #D1E4FF;
+    --color-angus-standard-light-on-tertiary-container: #194975;
+    --color-angus-standard-light-error: #884A6A;
+    --color-angus-standard-light-on-error: #FFFFFF;
+    --color-angus-standard-light-error-container: #FFD8E8;
+    --color-angus-standard-light-on-error-container: #6D3352;
+    --color-angus-standard-light-background: #F4FBFA;
+    --color-angus-standard-light-on-background: #161D1D;
+    --color-angus-standard-light-surface: #F5FAFB;
+    --color-angus-standard-light-on-surface: #171D1E;
+    --color-angus-standard-light-surface-variant: #DAE4E4;
+    --color-angus-standard-light-on-surface-variant: #3F4949;
+    --color-angus-standard-light-outline: #6F7979;
+    --color-angus-standard-light-outline-variant: #BEC8C8;
+    --color-angus-standard-light-scrim: #000000;
+    --color-angus-standard-light-inverse-surface: #2B3133;
+    --color-angus-standard-light-inverse-on-surface: #ECF2F3;
+    --color-angus-standard-light-inverse-primary: #80D5D4;
+    --color-angus-standard-light-surface-dim: #D5DBDC;
+    --color-angus-standard-light-surface-bright: #F5FAFB;
+    --color-angus-standard-light-surface-container-lowest: #FFFFFF;
+    --color-angus-standard-light-surface-container-low: #EFF5F6;
+    --color-angus-standard-light-surface-container: #E9EFF0;
+    --color-angus-standard-light-surface-container-high: #E3E9EA;
+    --color-angus-standard-light-surface-container-highest: #DEE3E5;
+    --color-angus-standard-light-custom-color1: #6F5D0E;
+    --color-angus-standard-light-on-custom-color1: #FFFFFF;
+    --color-angus-standard-light-custom-color1-container: #FBE187;
+    --color-angus-standard-light-on-custom-color1-container: #544600;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --color-angus-standard-light-primary: #80D5D4;
+        --color-angus-standard-light-on-primary: #003737;
+        --color-angus-standard-light-primary-container: #004F50;
+        --color-angus-standard-light-on-primary-container: #9CF1F0;
+        --color-angus-standard-light-secondary: #80D4D5;
+        --color-angus-standard-light-on-secondary: #003737;
+        --color-angus-standard-light-secondary-container: #004F50;
+        --color-angus-standard-light-on-secondary-container: #9CF1F1;
+        --color-angus-standard-light-tertiary: #A0CAFD;
+        --color-angus-standard-light-on-tertiary: #003258;
+        --color-angus-standard-light-tertiary-container: #194975;
+        --color-angus-standard-light-on-tertiary-container: #D1E4FF;
+        --color-angus-standard-light-error: #FDB0D4;
+        --color-angus-standard-light-on-error: #521D3B;
+        --color-angus-standard-light-error-container: #6D3352;
+        --color-angus-standard-light-on-error-container: #FFD8E8;
+        --color-angus-standard-light-background: #0E1514;
+        --color-angus-standard-light-on-background: #DDE4E3;
+        --color-angus-standard-light-surface: #0E1415;
+        --color-angus-standard-light-on-surface: #DEE3E5;
+        --color-angus-standard-light-surface-variant: #3F4949;
+        --color-angus-standard-light-on-surface-variant: #BEC8C8;
+        --color-angus-standard-light-outline: #899392;
+        --color-angus-standard-light-outline-variant: #3F4949;
+        --color-angus-standard-light-scrim: #000000;
+        --color-angus-standard-light-inverse-surface: #DEE3E5;
+        --color-angus-standard-light-inverse-on-surface: #2B3133;
+        --color-angus-standard-light-inverse-primary: #006A6A;
+        --color-angus-standard-light-surface-dim: #0E1415;
+        --color-angus-standard-light-surface-bright: #343A3B;
+        --color-angus-standard-light-surface-container-lowest: #090F10;
+        --color-angus-standard-light-surface-container-low: #171D1E;
+        --color-angus-standard-light-surface-container: #1B2122;
+        --color-angus-standard-light-surface-container-high: #252B2C;
+        --color-angus-standard-light-surface-container-highest: #303637;
+        --color-angus-standard-light-custom-color1: #DDC56E;
+        --color-angus-standard-light-on-custom-color1: #3A3000;
+        --color-angus-standard-light-custom-color1-container: #544600;
+        --color-angus-standard-light-on-custom-color1-container: #FBE187;
+    }
+}
+
+[data-contrast='medium'] {
+    --color-angus-standard-light-primary: #003D3D;
+    --color-angus-standard-light-on-primary: #FFFFFF;
+    --color-angus-standard-light-primary-container: #167979;
+    --color-angus-standard-light-on-primary-container: #FFFFFF;
+    --color-angus-standard-light-secondary: #003D3E;
+    --color-angus-standard-light-on-secondary: #FFFFFF;
+    --color-angus-standard-light-secondary-container: #16797A;
+    --color-angus-standard-light-on-secondary-container: #FFFFFF;
+    --color-angus-standard-light-tertiary: #003861;
+    --color-angus-standard-light-on-tertiary: #FFFFFF;
+    --color-angus-standard-light-tertiary-container: #45709E;
+    --color-angus-standard-light-on-tertiary-container: #FFFFFF;
+    --color-angus-standard-light-error: #592341;
+    --color-angus-standard-light-on-error: #FFFFFF;
+    --color-angus-standard-light-error-container: #995979;
+    --color-angus-standard-light-on-error-container: #FFFFFF;
+    --color-angus-standard-light-background: #F4FBFA;
+    --color-angus-standard-light-on-background: #161D1D;
+    --color-angus-standard-light-surface: #F5FAFB;
+    --color-angus-standard-light-on-surface: #0C1213;
+    --color-angus-standard-light-surface-variant: #DAE4E4;
+    --color-angus-standard-light-on-surface-variant: #2E3838;
+    --color-angus-standard-light-outline: #4A5454;
+    --color-angus-standard-light-outline-variant: #656F6F;
+    --color-angus-standard-light-scrim: #000000;
+    --color-angus-standard-light-inverse-surface: #2B3133;
+    --color-angus-standard-light-inverse-on-surface: #ECF2F3;
+    --color-angus-standard-light-inverse-primary: #80D5D4;
+    --color-angus-standard-light-surface-dim: #C2C7C9;
+    --color-angus-standard-light-surface-bright: #F5FAFB;
+    --color-angus-standard-light-surface-container-lowest: #FFFFFF;
+    --color-angus-standard-light-surface-container-low: #EFF5F6;
+    --color-angus-standard-light-surface-container: #E3E9EA;
+    --color-angus-standard-light-surface-container-high: #D8DEDF;
+    --color-angus-standard-light-surface-container-highest: #CDD3D4;
+    --color-angus-standard-light-custom-color1: #413500;
+    --color-angus-standard-light-on-custom-color1: #FFFFFF;
+    --color-angus-standard-light-custom-color1-container: #7F6C1D;
+    --color-angus-standard-light-on-custom-color1-container: #FFFFFF;
+}
+
+[data-contrast='high'] {
+    --color-angus-standard-light-primary: #003232;
+    --color-angus-standard-light-on-primary: #FFFFFF;
+    --color-angus-standard-light-primary-container: #005252;
+    --color-angus-standard-light-on-primary-container: #FFFFFF;
+    --color-angus-standard-light-secondary: #003232;
+    --color-angus-standard-light-on-secondary: #FFFFFF;
+    --color-angus-standard-light-secondary-container: #005253;
+    --color-angus-standard-light-on-secondary-container: #FFFFFF;
+    --color-angus-standard-light-tertiary: #002E51;
+    --color-angus-standard-light-on-tertiary: #FFFFFF;
+    --color-angus-standard-light-tertiary-container: #1C4B77;
+    --color-angus-standard-light-on-tertiary-container: #FFFFFF;
+    --color-angus-standard-light-error: #4D1936;
+    --color-angus-standard-light-on-error: #FFFFFF;
+    --color-angus-standard-light-error-container: #703654;
+    --color-angus-standard-light-on-error-container: #FFFFFF;
+    --color-angus-standard-light-background: #F4FBFA;
+    --color-angus-standard-light-on-background: #161D1D;
+    --color-angus-standard-light-surface: #F5FAFB;
+    --color-angus-standard-light-on-surface: #000000;
+    --color-angus-standard-light-surface-variant: #DAE4E4;
+    --color-angus-standard-light-on-surface-variant: #000000;
+    --color-angus-standard-light-outline: #242E2E;
+    --color-angus-standard-light-outline-variant: #414B4B;
+    --color-angus-standard-light-scrim: #000000;
+    --color-angus-standard-light-inverse-surface: #2B3133;
+    --color-angus-standard-light-inverse-on-surface: #FFFFFF;
+    --color-angus-standard-light-inverse-primary: #80D5D4;
+    --color-angus-standard-light-surface-dim: #B4BABB;
+    --color-angus-standard-light-surface-bright: #F5FAFB;
+    --color-angus-standard-light-surface-container-lowest: #FFFFFF;
+    --color-angus-standard-light-surface-container-low: #ECF2F3;
+    --color-angus-standard-light-surface-container: #DEE3E5;
+    --color-angus-standard-light-surface-container-high: #CFD5D6;
+    --color-angus-standard-light-surface-container-highest: #C2C7C9;
+    --color-angus-standard-light-custom-color1: #352B00;
+    --color-angus-standard-light-on-custom-color1: #FFFFFF;
+    --color-angus-standard-light-custom-color1-container: #574800;
+    --color-angus-standard-light-on-custom-color1-container: #FFFFFF;
+}
