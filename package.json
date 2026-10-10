@@ -29,7 +29,7 @@
   },
   "dependencies": {
     "@letta-ai/letta-agent-sdk": "0.8.39",
-    "@letta-ai/letta-code": "0.34.6"
+    "@letta-ai/letta-code": "0.34.10"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -73,6 +73,6 @@
   ],
   "overrides": {
     "@letta-ai/letta-agent-sdk": "0.8.39",
-    "@letta-ai/letta-code": "0.34.6"
+    "@letta-ai/letta-code": "0.34.10"
   }
 }
