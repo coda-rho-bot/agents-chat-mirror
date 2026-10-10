@@ -1,15 +1,15 @@
 /* Vendored from: angus-software-theming (git.angussoftware.dev/angus-bot/angus-software-theming)
-   Source: generated/angus_colors.css (AUTO-GENERATED — do not edit manually)
-   Sync manually when upstream tokens change — theming repo is not an npm package. */
+   Source: generated/angus_colors.css @ main (post-v0.11.3 brand-green contrast fix — #004F50 palette)
+   AUTO-GENERATED — do not edit manually. Sync manually when upstream tokens change. */
 /* AUTO-GENERATED from angus-tokens.json — do not edit manually. */
 /* Regenerate with: python3 scripts/generate_css.py */
 
 :root {
-    --color-angus-standard-light-primary: #006A6A;
+    --color-angus-standard-light-primary: #004F50;
     --color-angus-standard-light-on-primary: #FFFFFF;
     --color-angus-standard-light-primary-container: #9CF1F0;
     --color-angus-standard-light-on-primary-container: #004F50;
-    --color-angus-standard-light-secondary: #006A6A;
+    --color-angus-standard-light-secondary: #004F50;
     --color-angus-standard-light-on-secondary: #FFFFFF;
     --color-angus-standard-light-secondary-container: #9CF1F1;
     --color-angus-standard-light-on-secondary-container: #004F50;
@@ -32,7 +32,7 @@
     --color-angus-standard-light-scrim: #000000;
     --color-angus-standard-light-inverse-surface: #2B3133;
     --color-angus-standard-light-inverse-on-surface: #ECF2F3;
-    --color-angus-standard-light-inverse-primary: #80D5D4;
+    --color-angus-standard-light-inverse-primary: #96EBEA;
     --color-angus-standard-light-surface-dim: #D5DBDC;
     --color-angus-standard-light-surface-bright: #F5FAFB;
     --color-angus-standard-light-surface-container-lowest: #FFFFFF;
@@ -48,12 +48,12 @@
 
 @media (prefers-color-scheme: dark) {
     :root {
-        --color-angus-standard-light-primary: #80D5D4;
-        --color-angus-standard-light-on-primary: #003737;
+        --color-angus-standard-light-primary: #8CE3E2;
+        --color-angus-standard-light-on-primary: #002B2B;
         --color-angus-standard-light-primary-container: #004F50;
         --color-angus-standard-light-on-primary-container: #9CF1F0;
-        --color-angus-standard-light-secondary: #80D4D5;
-        --color-angus-standard-light-on-secondary: #003737;
+        --color-angus-standard-light-secondary: #8CE3E2;
+        --color-angus-standard-light-on-secondary: #002B2B;
         --color-angus-standard-light-secondary-container: #004F50;
         --color-angus-standard-light-on-secondary-container: #9CF1F1;
         --color-angus-standard-light-tertiary: #A0CAFD;
@@ -75,7 +75,7 @@
         --color-angus-standard-light-scrim: #000000;
         --color-angus-standard-light-inverse-surface: #DEE3E5;
         --color-angus-standard-light-inverse-on-surface: #2B3133;
-        --color-angus-standard-light-inverse-primary: #006A6A;
+        --color-angus-standard-light-inverse-primary: #004F50;
         --color-angus-standard-light-surface-dim: #0E1415;
         --color-angus-standard-light-surface-bright: #343A3B;
         --color-angus-standard-light-surface-container-lowest: #090F10;
