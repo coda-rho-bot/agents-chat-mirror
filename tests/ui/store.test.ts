@@ -95,6 +95,7 @@ function createBridge() {
     stopTurn: vi.fn(),
     respondApproval: vi.fn(),
     selectDirectory: vi.fn(),
+    selectImages: vi.fn(async () => ({ attachments: [], skipped: [] })),
     oauthSignIn: vi.fn(),
     removeQueuedMessage: vi.fn(),
     listProfiles: vi.fn(async () => profilesResult()),

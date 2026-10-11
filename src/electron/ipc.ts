@@ -28,6 +28,7 @@ import {
 } from "./libs/memory.js";
 import { connectProvider, disconnectProvider, listModels, listProviders } from "./libs/providers.js";
 import { getSettings, updateSettings } from "./libs/settings.js";
+import { intakeFiles } from "./libs/attachments.js";
 import {
   CLOUD_DEFAULT_URL,
   deleteProfile,
@@ -182,6 +183,16 @@ const handlers: Handlers = {
       properties: ["openDirectory", "createDirectory"],
     });
     return result.canceled ? null : (result.filePaths[0] ?? null);
+  },
+  selectImages: async () => {
+    const window = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+    const result = await dialog.showOpenDialog(window, {
+      properties: ["openFile", "multiSelections"],
+      // gif/webp decode to their first frame at intake (re-encoded to JPEG).
+      filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "gif"] }],
+    });
+    if (result.canceled) return { attachments: [], skipped: [] };
+    return intakeFiles(result.filePaths);
   },
 };
 

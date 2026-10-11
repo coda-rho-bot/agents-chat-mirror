@@ -29,6 +29,7 @@ const METHODS = [
   "stopTurn",
   "respondApproval",
   "selectDirectory",
+  "selectImages",
   "oauthSignIn",
   "removeQueuedMessage",
   "listProfiles",

@@ -179,6 +179,18 @@ export type ChatTextRow = {
   text: string;
   /** Correlates an optimistic user row with the message Letta persists. */
   otid?: string;
+  /** Images sent with this row — present on user rows only. */
+  images?: AttachmentView[];
+};
+
+/** An image attachment as the renderer stages it — base64 data, never a path. */
+export type AttachmentView = {
+  id: string;
+  name: string;
+  data: string;
+  mediaType: "image/jpeg";
+  width: number;
+  height: number;
 };
 
 export type ChatToolRow = {
@@ -222,6 +234,8 @@ export type SendMessageInput = {
   otid: string;
   cwd: string;
   model?: string;
+  /** Images to send with the message; empty text is allowed when present. */
+  attachments?: AttachmentView[];
 };
 
 /** Main -> renderer push events. */
@@ -281,6 +295,8 @@ export type AppRequests = {
   renameConversation(conversationId: string, title: string): ConversationSummary;
   archiveConversation(conversationId: string): void;
   sendMessage(input: SendMessageInput): ConversationSummary;
+  /** Pick image files (native dialog) and run intake; skipped files come back with reasons. */
+  selectImages(): { attachments: AttachmentView[]; skipped: string[] };
   stopTurn(conversationId: string): void;
   respondApproval(conversationId: string, requestId: string, decision: ApprovalDecision): void;
   selectDirectory(): string | null;
