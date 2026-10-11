@@ -25,6 +25,7 @@
   --color-ink-400: var(--color-angus-standard-light-outline-variant);
   
   /* Muted colors */
+  /* Not token-mapped: the v0.14.1 angus palette carries no muted role (Material roles only). */
   --color-muted: #9ca3af;
   --color-muted-light: #a6a6a6;
   
@@ -37,10 +38,12 @@
   /* Status colors */
   --color-error: var(--color-angus-standard-light-error);
   --color-error-light: var(--color-angus-standard-light-error-container);
+  /* Not token-mapped: the v0.14.1 angus palette carries no success role. */
   --color-success: #16a34a;
   --color-success-light: #f0fdf4;
   --color-info: var(--color-angus-standard-light-tertiary);
   --color-info-light: var(--color-angus-standard-light-tertiary-container);
+  /* Not token-mapped: the v0.14.1 angus palette carries no warning role. */
   --color-warning: #b87800;
   --color-warning-light: #fffbeb;
   

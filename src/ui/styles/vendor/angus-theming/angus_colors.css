@@ -1,6 +1,10 @@
-/* Vendored from: angus-software-theming (git.angussoftware.dev/angus-bot/angus-software-theming)
-   Source: generated/angus_colors.css @ main (post-v0.11.3 brand-green contrast fix — #004F50 palette)
-   AUTO-GENERATED — do not edit manually. Sync manually when upstream tokens change. */
+/* Vendored from: angus-software-theming (https://git.angussoftware.dev/angus-bot/angus-software-theming)
+   Source: generated/angus_colors.css @ tag v0.14.1 (commit 04650951d331) — the angus-bot repo, NOT
+   the stale coda/ transfer mirror (v0.10.22).
+   Byte-identical to the previous vendored copy (post-v0.11.3 brand-green contrast fix):
+   156/156 tokens, no renames or removals. The artifact's prefers-color-scheme dark block is
+   vendored verbatim — present, unmapped by this pane (no dark-mode work; existing wiring only).
+   AUTO-GENERATED upstream — do not edit manually. Sync manually when upstream tokens change. */
 /* AUTO-GENERATED from angus-tokens.json — do not edit manually. */
 /* Regenerate with: python3 scripts/generate_css.py */
 
