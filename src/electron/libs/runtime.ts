@@ -35,6 +35,7 @@ import {
   setAgentId,
 } from "./settings.js";
 import { describeError, mergeHistory, projectHistory, toChatRow } from "./transcript.js";
+import { classifyResult } from "@angus/letta-client-core";
 
 /**
  * Everything that talks to Letta: the SDK client, agent and conversation
@@ -425,12 +426,14 @@ async function runTurn(turn: Turn, text: string, otid: string): Promise<void> {
         case "error":
           failure = describeError(message.errorDetail ?? message.message);
           break;
-        case "result":
-          failure = message.success
-            ? undefined
-            : (failure ??
-              describeError(message.errorDetail ?? message.error ?? "The turn failed."));
+        case "result": {
+          const outcome = classifyResult(message);
+          failure =
+            outcome.kind === "success" || outcome.kind === "stream_lost"
+              ? undefined
+              : (failure ?? outcome.detail);
           break;
+        }
         case "retry": {
           // A retried turn re-streams from the top, so the rows written by the
           // abandoned attempt are dropped rather than accumulated onto.

@@ -5,6 +5,12 @@ import {
 } from "@letta-ai/letta-agent-sdk";
 import type { ChatRow } from "../types.js";
 
+// Phase 2 wire-up: terminal doctrine comes from the shared core (one
+// implementation, two shells). Projection stays local for now — desktop's
+// accumulator-narrowing differs from Android's reducer projection; unify in
+// the follow-up extraction pass.
+export { classifyResult, classifyStreamError } from "@angus/letta-client-core";
+
 /**
  * Projection from the SDK's transcript rows to what the renderer draws.
  *
