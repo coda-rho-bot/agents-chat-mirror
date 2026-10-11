@@ -198,18 +198,23 @@ export type AppEvent =
   | { type: "turn.rows.removed"; conversationId: string; keys: string[] }
   | { type: "turn.activity"; conversationId: string; activity: string | null }
   | { type: "turn.finished"; conversationId: string; error?: string }
+  | { type: "turn.queue"; conversationId: string; queue: QueuedItem[] }
   | { type: "approval.requested"; conversationId: string; request: ApprovalRequest }
   | { type: "approval.resolved"; conversationId: string; requestId: string }
   | { type: "conversation.updated"; conversation: ConversationSummary }
   | { type: "menu"; command: "new-chat" | "settings" };
 
 /** Renderer -> main requests. Every method is an `ipcRenderer.invoke` round trip. */
+/** A queued follow-up, from the server's queue_update frames. */
+export type QueuedItem = { id: string; text: string };
+
 export type AppRequests = {
   getSettings(): AppSettings;
   updateSettings(update: SettingsUpdate): AppSettings;
   getConnection(): ConnectionState;
   reconnect(): ConnectionState;
   oauthSignIn(): { ok: true; apiKey: string } | { ok: false; error: string };
+  removeQueuedMessage(conversationId: string, itemId: string): void;
   listAgents(): AgentSummary[];
   createAgent(input: { name: string; model?: string }): AgentSummary;
   getAgent(agentId: string): AgentDetails;

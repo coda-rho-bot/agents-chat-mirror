@@ -30,6 +30,7 @@ const METHODS = [
   "respondApproval",
   "selectDirectory",
   "oauthSignIn",
+  "removeQueuedMessage",
 ] as const satisfies readonly (keyof AppRequests)[];
 
 // Fails to compile if a request is added to AppRequests but not listed above.

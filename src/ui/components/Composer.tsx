@@ -125,7 +125,10 @@ export function Composer({ disabled }: { disabled: boolean }) {
     if (!disabled) inputRef.current?.focus();
   }, [key, disabled]);
 
-  const canSend = !disabled && !running && draft.trim().length > 0;
+  // Mid-run sends are queued server-side (delivered when the turn ends) —
+  // the composer stays usable while a turn runs; the stop button remains
+  // available for aborting the active run.
+  const canSend = !disabled && draft.trim().length > 0;
 
   return (
     <div className="mx-auto w-full max-w-3xl px-6 pb-5">

@@ -35,7 +35,7 @@ import {
   setAgentId,
 } from "./settings.js";
 import { describeError, mergeHistory, projectHistory, toChatRow } from "./transcript.js";
-import { classifyResult } from "@angus/letta-client-core";
+import { classifyResult, contentToText } from "@angus/letta-client-core";
 import { freshAccessToken } from "./oauth.js";
 
 /**
@@ -56,6 +56,7 @@ type Turn = {
   sent: Map<string, TranscriptRow>;
   approvals: Map<string, PendingApproval>;
   activity: string | null;
+  queue: { id: string; text: string }[];
   flushTimer: NodeJS.Timeout | null;
   stopped: boolean;
   finished: boolean;
@@ -466,6 +467,19 @@ async function runTurn(turn: Turn, text: string, otid: string): Promise<void> {
         case "loop_status":
           if (message.status in ACTIVITY) setActivity(turn, ACTIVITY[message.status]);
           break;
+        case "queue_update":
+          // Server-authoritative queue (own sends only — the relay does not
+          // fan out other clients' queue state; same limitation as loop_status).
+          turn.queue = message.queue.map((item) => ({
+            id: item.id,
+            text: contentToText(item.content),
+          }));
+          emit({
+            type: "turn.queue",
+            conversationId: turn.conversationId,
+            queue: turn.queue,
+          });
+          break;
         default:
           turn.accumulator.apply(message);
           scheduleFlush(turn);
@@ -478,13 +492,24 @@ async function runTurn(turn: Turn, text: string, otid: string): Promise<void> {
   }
 }
 
+export async function removeQueuedMessage(conversationId: string, itemId: string): Promise<void> {
+  const turn = turns.get(conversationId);
+  const session = turn?.session;
+  if (!session) return;
+  // Never remove optimistically — the server's next queue_update confirms.
+  // Pending-removal marking is a UI concern once the renderer tracks it.
+  await session.removeQueuedMessage(itemId);
+}
+
 export async function sendMessage(input: SendMessageInput): Promise<ConversationSummary> {
   const sdk = await ensureClient();
   const text = input.text.trim();
   if (!text) throw new Error("Message is empty.");
-  if (input.conversationId && turns.has(input.conversationId)) {
-    throw new Error("This chat is still working. Stop it or wait for it to finish.");
-  }
+  // Mid-run sends are ALLOWED: the server queues them (delivered when the
+  // current run finishes; surfaced via queue_update frames). Android parity —
+  // the queue renders in-UI and items are removable before delivery.
+  // The send still opens its own session below; the active turn's stream
+  // will observe the queue_update on its next frame.
 
   let conversation: ConversationSummary;
   if (input.conversationId) {
@@ -519,6 +544,7 @@ export async function sendMessage(input: SendMessageInput): Promise<Conversation
     sent: new Map(),
     approvals: new Map(),
     activity: "Starting",
+    queue: [],
     flushTimer: null,
     stopped: false,
     finished: false,

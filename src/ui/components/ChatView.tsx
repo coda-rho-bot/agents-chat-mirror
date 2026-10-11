@@ -116,6 +116,7 @@ export function ChatView() {
   const cwd = useAppStore((state) => selectCwd(state, activeId ?? NEW_CHAT));
   const loadHistory = useAppStore((state) => state.loadHistory);
   const respondApproval = useAppStore((state) => state.respondApproval);
+  const removeQueued = useAppStore((state) => state.removeQueued);
 
   const rows: ChatRow[] = activeId ? chat.rows : pendingFirstMessage ? [pendingFirstMessage] : [];
   const running = activeId ? chat.running : pendingFirstMessage !== null;
@@ -256,6 +257,32 @@ export function ChatView() {
         </div>
       )}
 
+      {chat.queue.length > 0 && (
+        <div className="border-t border-border bg-surface-secondary px-4 py-2" data-testid="queue-strip">
+          <div className="flex items-center gap-2 text-xs text-muted">
+            <span className="font-medium">Queued ({chat.queue.length})</span>
+            <span>— sends while the turn runs; delivered when it finishes.</span>
+          </div>
+          <ul className="mt-1 flex flex-col gap-1">
+            {chat.queue.map((item) => (
+              <li
+                key={item.id}
+                className="flex items-center justify-between gap-3 rounded-lg bg-surface px-3 py-1.5 text-sm"
+              >
+                <span className="truncate text-ink-700">{item.text}</span>
+                <button
+                  type="button"
+                  onClick={() => void removeQueued(activeId!, item.id)}
+                  aria-label="Remove from queue"
+                  className="shrink-0 text-muted hover:text-error"
+                >
+                  Remove
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       {approval && (
         <ApprovalPanel
           request={approval}

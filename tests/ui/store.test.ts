@@ -71,6 +71,7 @@ function createBridge() {
     respondApproval: vi.fn(),
     selectDirectory: vi.fn(),
     oauthSignIn: vi.fn(),
+    removeQueuedMessage: vi.fn(),
   } satisfies Record<keyof AppBridge, unknown>;
 }
 

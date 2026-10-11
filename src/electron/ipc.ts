@@ -3,6 +3,7 @@ import type { AppEvent, AppRequests } from "./types.js";
 import {
   applyPermissionMode,
   archiveConversation,
+  removeQueuedMessage,
   createAgent,
   deleteAgent,
   getAgent,
@@ -85,6 +86,7 @@ const handlers: Handlers = {
   loadHistory,
   renameConversation,
   archiveConversation,
+  removeQueuedMessage,
   sendMessage,
   stopTurn,
   respondApproval,

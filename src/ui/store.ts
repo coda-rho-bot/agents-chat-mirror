@@ -33,6 +33,7 @@ export type ChatState = {
   activity: string | null;
   error: string | null;
   approvals: ApprovalRequest[];
+  queue: { id: string; text: string }[];
 };
 
 export type MemoryState = {
@@ -55,6 +56,7 @@ const EMPTY_CHAT: ChatState = {
   activity: null,
   error: null,
   approvals: [],
+  queue: [],
 };
 
 type AppState = {
@@ -99,6 +101,7 @@ type AppState = {
   send: (text: string) => Promise<void>;
   stop: () => void;
   respondApproval: (requestId: string, decision: ApprovalDecision) => void;
+  removeQueued: (conversationId: string, itemId: string) => void;
   renameConversation: (conversationId: string, title: string) => Promise<void>;
   archiveConversation: (conversationId: string) => Promise<void>;
   saveSettings: (update: SettingsUpdate) => Promise<void>;
@@ -222,6 +225,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       case "turn.activity":
         set((state) =>
           patchChat(state, event.conversationId, () => ({ activity: event.activity })),
+        );
+        break;
+      case "turn.queue":
+        set((state) =>
+          patchChat(state, event.conversationId, () => ({ queue: event.queue })),
         );
         break;
       case "turn.finished":
@@ -478,6 +486,16 @@ export const useAppStore = create<AppState>((set, get) => ({
       })),
     );
     void api.respondApproval(activeId, requestId, decision);
+  },
+
+  removeQueued: (conversationId, itemId) => {
+    // Optimistic-hide; the server's next queue_update confirms (or restores).
+    set((state) =>
+      patchChat(state, conversationId, (chat) => ({
+        queue: chat.queue.filter((item) => item.id !== itemId),
+      })),
+    );
+    void api.removeQueuedMessage(conversationId, itemId);
   },
 
   renameConversation: async (conversationId, title) => {
