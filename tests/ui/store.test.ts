@@ -15,6 +15,7 @@ const settings: AppSettings = {
   apiBaseUrl: "",
   hasApiKey: false,
   hasServerToken: false,
+  activeProfileId: null,
   permissionMode: "standard",
   agentId: "agent-2",
   recentCwds: ["/recent"],

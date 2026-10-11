@@ -3,6 +3,20 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { AppSettings, BackendKind, PermissionMode, SettingsUpdate } from "../types.js";
+import {
+  CLOUD_DEFAULT_URL,
+  activeProfile,
+  loadProfiles,
+  markMigrationDone,
+  migrationDone,
+  newProfileId,
+  profileHasSecret,
+  readLegacyOAuthCredential,
+  saveOAuthProfile,
+  saveProfile,
+  setActiveProfileId,
+  type Profile,
+} from "./profiles.js";
 
 /**
  * App settings, persisted as JSON in the user data directory.
@@ -20,7 +34,8 @@ type StoredSettings = {
   apiKey?: string;
   serverToken?: string;
   permissionMode?: PermissionMode;
-  agentIds?: Partial<Record<BackendKind, string>>;
+  /** Remembered agent per connection — keyed by profile id, or by backend when profile-less. */
+  agentIds?: Record<string, string>;
   recentCwds?: string[];
   conversationCwds?: Record<string, string>;
 };
@@ -88,6 +103,14 @@ function env(name: string): string {
 }
 
 export function getConnectionConfig(): ConnectionConfig {
+  const profile = activeProfile();
+  if (profile) {
+    // A profile owns the connection; its secret resolves at connect time
+    // (runtime.ts) and never leaves the main process through this shape.
+    return profile.type === "cloud"
+      ? { backend: "cloud", apiKey: "", serverUrl: "", serverToken: "", apiBaseUrl: profile.url || "" }
+      : { backend: "remote", apiKey: "", serverUrl: profile.url, serverToken: "", apiBaseUrl: "" };
+  }
   const stored = load();
   const apiKey = decodeSecret(stored.apiKey) || env("LETTA_API_KEY");
   const envBackend = env("LETTA_BACKEND").toLowerCase() as BackendKind;
@@ -108,33 +131,49 @@ export function getConnectionConfig(): ConnectionConfig {
 
 export function getSettings(): AppSettings {
   const stored = load();
+  const profile = activeProfile();
   const config = getConnectionConfig();
+  const agentKey = profile?.id ?? config.backend;
   return {
     backend: config.backend,
     serverUrl: config.serverUrl,
     apiBaseUrl: config.apiBaseUrl,
-    hasApiKey: config.apiKey.length > 0,
-    hasServerToken: config.serverToken.length > 0,
+    hasApiKey: profile
+      ? profile.type === "cloud" && profileHasSecret(profile.id)
+      : config.apiKey.length > 0,
+    hasServerToken: profile
+      ? profile.type === "remote" && profileHasSecret(profile.id)
+      : config.serverToken.length > 0,
     permissionMode: stored.permissionMode ?? "standard",
-    agentId: stored.agentIds?.[config.backend] ?? null,
+    agentId:
+      stored.agentIds?.[agentKey] ??
+      (profile ? stored.agentIds?.[config.backend] : undefined) ??
+      null,
     recentCwds: stored.recentCwds ?? [],
     defaultCwd: homedir(),
+    activeProfileId: profile?.id ?? null,
   };
 }
 
 /** Apply an update and report whether the backend connection must be rebuilt. */
 export function updateSettings(update: SettingsUpdate): { connectionChanged: boolean } {
-  const before = JSON.stringify(getConnectionConfig());
+  const profile = activeProfile();
+  const before = profile ? null : JSON.stringify(getConnectionConfig());
   const next: StoredSettings = { ...load() };
 
-  if (update.backend && BACKENDS.includes(update.backend)) next.backend = update.backend;
-  if (update.serverUrl !== undefined) next.serverUrl = update.serverUrl.trim();
-  if (update.apiBaseUrl !== undefined) next.apiBaseUrl = update.apiBaseUrl.trim();
-  if (update.apiKey !== undefined) {
-    next.apiKey = update.apiKey ? encodeSecret(update.apiKey.trim()) : undefined;
-  }
-  if (update.serverToken !== undefined) {
-    next.serverToken = update.serverToken ? encodeSecret(update.serverToken.trim()) : undefined;
+  // Connection fields belong to the active profile (edited via the profiles
+  // pane); with none active they keep their pre-profiles meaning. Permission
+  // mode and agent selection always apply.
+  if (!profile) {
+    if (update.backend && BACKENDS.includes(update.backend)) next.backend = update.backend;
+    if (update.serverUrl !== undefined) next.serverUrl = update.serverUrl.trim();
+    if (update.apiBaseUrl !== undefined) next.apiBaseUrl = update.apiBaseUrl.trim();
+    if (update.apiKey !== undefined) {
+      next.apiKey = update.apiKey ? encodeSecret(update.apiKey.trim()) : undefined;
+    }
+    if (update.serverToken !== undefined) {
+      next.serverToken = update.serverToken ? encodeSecret(update.serverToken.trim()) : undefined;
+    }
   }
   if (update.permissionMode && PERMISSION_MODES.includes(update.permissionMode)) {
     next.permissionMode = update.permissionMode;
@@ -142,16 +181,101 @@ export function updateSettings(update: SettingsUpdate): { connectionChanged: boo
   save(next);
 
   if (update.agentId !== undefined) setAgentId(update.agentId);
-  return { connectionChanged: before !== JSON.stringify(getConnectionConfig()) };
+  return {
+    connectionChanged: profile ? false : before !== JSON.stringify(getConnectionConfig()),
+  };
 }
 
 export function setAgentId(agentId: string | null): void {
   const stored = load();
-  const backend = getConnectionConfig().backend;
+  const key = activeProfile()?.id ?? getConnectionConfig().backend;
   const agentIds = { ...stored.agentIds };
-  if (agentId) agentIds[backend] = agentId;
-  else delete agentIds[backend];
+  if (agentId) agentIds[key] = agentId;
+  else delete agentIds[key];
   save({ ...stored, agentIds });
+}
+
+// --- Migration --------------------------------------------------------------
+// One-shot: fold the pre-profiles single-connection settings into a profile.
+// Guarded by a flag so deleting every profile later stays deleted; legacy
+// fields are never removed — with no profile active they remain the
+// connection, byte-identical to the pre-profiles behavior.
+
+export async function migrateLegacySettings(): Promise<void> {
+  await loadProfiles();
+  if (await migrationDone()) return;
+  await migrateStoredConnection();
+  await markMigrationDone();
+  await loadProfiles();
+}
+
+async function migrateStoredConnection(): Promise<void> {
+  const stored = load();
+  if (stored.backend === "cloud") {
+    // A persisted OAuth credential wins over the stored key: sign-in wrote
+    // both, and the credential is the live refreshable mechanism.
+    const credential = await readLegacyOAuthCredential();
+    if (credential) {
+      const profile: Profile = {
+        id: newProfileId(),
+        type: "cloud",
+        name: "Letta Cloud",
+        url: CLOUD_DEFAULT_URL,
+        authMethod: "oauth",
+        createdAt: Date.now(),
+      };
+      await saveOAuthProfile(profile, credential);
+      await finishMigration(profile, stored);
+      return;
+    }
+    const apiKey = decodeSecret(stored.apiKey);
+    if (apiKey) {
+      const profile: Profile = {
+        id: newProfileId(),
+        type: "cloud",
+        name: "Letta Cloud",
+        url: stored.apiBaseUrl?.trim() || CLOUD_DEFAULT_URL,
+        authMethod: "api_key",
+        createdAt: Date.now(),
+      };
+      await saveProfile(profile, apiKey);
+      await finishMigration(profile, stored);
+      return;
+    }
+  }
+  if (stored.backend === "remote" && stored.serverUrl) {
+    const profile: Profile = {
+      id: newProfileId(),
+      type: "remote",
+      name: remoteName(stored.serverUrl),
+      url: stored.serverUrl,
+      createdAt: Date.now(),
+    };
+    const token = decodeSecret(stored.serverToken);
+    await saveProfile(profile, token || null);
+    await finishMigration(profile, stored);
+  }
+  // Local-only and fresh installs migrate nothing; the built-in local
+  // connection keeps working exactly as before.
+}
+
+async function finishMigration(profile: Profile, stored: StoredSettings): Promise<void> {
+  await setActiveProfileId(profile.id);
+  // Grandfather the remembered agent selection into the new profile key.
+  const legacyKey = profile.type === "remote" ? "remote" : "cloud";
+  const agentId = stored.agentIds?.[legacyKey];
+  if (agentId) {
+    const agentIds = { ...load().agentIds, [profile.id]: agentId };
+    save({ ...load(), agentIds });
+  }
+}
+
+function remoteName(url: string): string {
+  try {
+    return new URL(url).host || "Remote server";
+  } catch {
+    return "Remote server";
+  }
 }
 
 export function getPermissionMode(): PermissionMode {

@@ -10,6 +10,7 @@ import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { broadcast, registerIpc } from "./ipc.js";
 import { disconnect, initRuntime } from "./libs/runtime.js";
+import { migrateLegacySettings } from "./libs/settings.js";
 import type { AppEvent } from "./types.js";
 import { DEV_URL, getIconPath, getPreloadPath, getUIPath, isAppUrl, isDev } from "./util.js";
 
@@ -150,11 +151,14 @@ if (!app.requestSingleInstanceLock()) {
     mainWindow.focus();
   });
 
-  void app.whenReady().then(() => {
+  void app.whenReady().then(async () => {
     loadDevEnv();
     inheritShellPath();
     Menu.setApplicationMenu(buildMenu());
     registerIpc();
+    // One-shot: fold the pre-profiles single-connection settings into a
+    // profile before anything reads the connection config.
+    await migrateLegacySettings().catch(() => undefined);
     initRuntime(broadcast);
     createWindow();
 

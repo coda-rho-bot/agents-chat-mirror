@@ -5,6 +5,7 @@ type Store = typeof import("../../src/ui/store");
 
 const settings: AppSettings = {
   backend: "local", serverUrl: "", apiBaseUrl: "", hasApiKey: false, hasServerToken: false,
+  activeProfileId: null,
   permissionMode: "standard", agentId: "agent-2", recentCwds: ["/recent"], defaultCwd: "/home",
 };
 const agents: AgentSummary[] = [

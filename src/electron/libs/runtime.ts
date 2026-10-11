@@ -36,7 +36,7 @@ import {
 } from "./settings.js";
 import { describeError, mergeHistory, projectHistory, toChatRow } from "./transcript.js";
 import { classifyResult, contentToText } from "@angus/letta-client-core";
-import { freshAccessToken } from "./oauth.js";
+import { activeProfile, getProfileSecret } from "./profiles.js";
 
 /**
  * Everything that talks to Letta: the SDK client, agent and conversation
@@ -121,11 +121,21 @@ async function connect(): Promise<LettaAgentClient> {
   let config = getConnectionConfig();
   setConnection({ status: "connecting", backend: config.backend });
 
-  // OAuth refresh-on-connect: if a persisted credential exists and is
-  // expired/near-expiry, swap in a fresh access token before connecting.
-  if (config.backend === "cloud") {
-    const fresh = await freshAccessToken();
-    if (fresh) config = { ...config, apiKey: fresh };
+  // Profile connections resolve their secret at connect time (refreshing an
+  // expired OAuth credential via the core, single-flight). The built-in
+  // local connection and the legacy single-profile settings keep their
+  // existing behavior — no profile, no secret resolution.
+  const profile = activeProfile();
+  if (profile) {
+    const secret = await getProfileSecret(profile.id);
+    if (profile.type === "cloud") {
+      if (profile.authMethod === "oauth" && !secret) {
+        throw new Error("Your Letta Cloud session has ended — sign in again from Settings → Profiles.");
+      }
+      config = { ...config, apiKey: secret ?? "" };
+    } else {
+      config = { ...config, serverToken: secret ?? "" };
+    }
   }
 
   let next: LettaAgentClient | null = null;

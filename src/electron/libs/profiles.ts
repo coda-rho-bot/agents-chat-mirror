@@ -1,4 +1,5 @@
 import { app } from "electron";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   parseOAuthCredential,
@@ -9,7 +10,7 @@ import {
   type SecretStore,
 } from "@angus/letta-client-core";
 import { fileKeyValueStore } from "./kvstore.js";
-import { safeStorageSecretStore } from "./secrets.js";
+import { parseEncryptedJson, safeStorageSecretStore } from "./secrets.js";
 
 /**
  * Connection profiles — multiple named connections (cloud OAuth, cloud API
@@ -190,6 +191,21 @@ export async function migrationDone(): Promise<boolean> {
 
 export async function markMigrationDone(): Promise<void> {
   await kv().set(MIGRATED_KEY, "1");
+}
+
+/**
+ * The pre-profiles OAuth credential (oauth.ts's single-credential store).
+ * Read-only, for the one-shot migration into a profile secret; the legacy
+ * file itself is left in place so a failed migration destroys nothing.
+ */
+export async function readLegacyOAuthCredential(): Promise<OAuthCredential | null> {
+  try {
+    const raw = readFileSync(join(app.getPath("userData"), "oauth-credential.bin"));
+    const stored = parseEncryptedJson(raw);
+    return stored.credential ? parseOAuthCredential(stored.credential) : null;
+  } catch {
+    return null;
+  }
 }
 
 // --- Snapshot ---------------------------------------------------------------

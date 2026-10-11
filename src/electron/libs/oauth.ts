@@ -15,7 +15,6 @@ import {
   exchangeAuthorizationCode,
   getOAuthClientId,
   LETTA_OAUTH_BASE_URL,
-  refreshOAuthCredential,
   type OAuthCredential,
 } from "@angus/letta-client-core";
 
@@ -135,32 +134,4 @@ export function loadOAuthCredential(): OAuthCredential | null {
     }
   } catch { /* corrupt store = no credential */ }
   return null;
-}
-
-/** Drop the persisted credential (sign-out). */
-export function clearOAuthCredential(): void {
-  readCredentialStore().delete("credential");
-}
-
-/**
- * Refresh-on-connect: read the persisted credential; if present and expired
- * (or expiring within the skew window), refresh it via the core, persist the
- * new value, and return the live access token. Returns null when there is no
- * credential (API-key users) — callers fall through to the stored key.
- */
-const REFRESH_SKEW_MS = 60_000;
-
-export async function freshAccessToken(): Promise<string | null> {
-  const credential = loadOAuthCredential();
-  if (!credential) return null;
-  if (credential.expiresAt - REFRESH_SKEW_MS > Date.now()) return credential.accessToken;
-  try {
-    const refreshed = await refreshOAuthCredential(credential);
-    persistOAuthCredential(refreshed);
-    return refreshed.accessToken;
-  } catch {
-    // Refresh failed (revoked? offline?) — surface nothing here; the stored
-    // key still applies and its failure mode is the normal auth error.
-    return null;
-  }
 }

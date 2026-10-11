@@ -22,8 +22,10 @@ export type AppSettings = {
   /** Secrets never leave the main process; the renderer only learns whether one is set. */
   hasApiKey: boolean;
   hasServerToken: boolean;
+  /** The active connection profile; null = the built-in local connection. */
+  activeProfileId: string | null;
   permissionMode: PermissionMode;
-  /** Agent selected for the current backend. */
+  /** Agent selected for the current profile (or backend, when profile-less). */
   agentId: string | null;
   recentCwds: string[];
   defaultCwd: string;
