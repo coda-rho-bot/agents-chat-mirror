@@ -36,6 +36,7 @@ import {
 } from "./settings.js";
 import { describeError, mergeHistory, projectHistory, toChatRow } from "./transcript.js";
 import { classifyResult } from "@angus/letta-client-core";
+import { freshAccessToken } from "./oauth.js";
 
 /**
  * Everything that talks to Letta: the SDK client, agent and conversation
@@ -116,8 +117,15 @@ function describeConnectionError(error: unknown, config: ConnectionConfig): stri
 }
 
 async function connect(): Promise<LettaAgentClient> {
-  const config = getConnectionConfig();
+  let config = getConnectionConfig();
   setConnection({ status: "connecting", backend: config.backend });
+
+  // OAuth refresh-on-connect: if a persisted credential exists and is
+  // expired/near-expiry, swap in a fresh access token before connecting.
+  if (config.backend === "cloud") {
+    const fresh = await freshAccessToken();
+    if (fresh) config = { ...config, apiKey: fresh };
+  }
 
   let next: LettaAgentClient | null = null;
   let owned: AppServerHandle | null = null;
