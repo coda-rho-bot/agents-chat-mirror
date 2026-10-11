@@ -27,7 +27,7 @@ import {
 } from "./libs/memory.js";
 import { connectProvider, disconnectProvider, listModels, listProviders } from "./libs/providers.js";
 import { getSettings, updateSettings } from "./libs/settings.js";
-import { signInWithLetta } from "./libs/oauth.js";
+import { persistOAuthCredential, signInWithLetta } from "./libs/oauth.js";
 import { describeError } from "./libs/transcript.js";
 import { validateEventFrame } from "./util.js";
 
@@ -57,9 +57,10 @@ const handlers: Handlers = {
   oauthSignIn: async () => {
     try {
       const credential = await signInWithLetta();
-      // The app's cloud connection takes an API key; the OAuth access token
-      // IS that key for its lifetime. Refresh-on-expiry rides in a follow-up
-      // (needs a connection-time hook); first landing = sign-in works.
+      // Persist the FULL credential (access + refresh + expiry) so the
+      // refresh hook (follow-up) has something to refresh with. The app's
+      // cloud connection still takes the access token as its API key.
+      persistOAuthCredential(credential);
       return { ok: true as const, apiKey: credential.accessToken };
     } catch (error) {
       return { ok: false as const, error: error instanceof Error ? error.message : String(error) };
