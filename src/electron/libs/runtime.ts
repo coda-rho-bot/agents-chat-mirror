@@ -432,14 +432,14 @@ async function runTurn(turn: Turn, text: string, otid: string): Promise<void> {
             // Transport died mid-turn; the run may complete server-side.
             // Desktop has no uncertainty surface yet (no connection-banner
             // equivalent for remote-backend socket death) — a silent
-            // truncation reads as completion. Surface the loss as a soft
-            // note until an uncertainty surface exists (review 2773).
-            setActivity(turn, "Connection lost mid-turn — response may be incomplete");
+            // truncation reads as completion. The error box renders
+            // unconditionally, so route the note through failure; retires
+            // with the Phase 1.5 uncertainty surface (reviews 2773/2776).
+            failure = failure ?? "Connection lost mid-turn — response may be incomplete";
+            break;
           }
           failure =
-            outcome.kind === "success" || outcome.kind === "stream_lost"
-              ? undefined
-              : (failure ?? outcome.detail);
+            outcome.kind === "success" ? undefined : (failure ?? outcome.detail);
           break;
         }
         case "retry": {
