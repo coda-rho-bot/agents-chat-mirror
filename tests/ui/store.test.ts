@@ -7,6 +7,7 @@ import type {
   ChatRow,
   ComputerSelectorField,
   ComputerSummary,
+  ConversationEnv,
   ConversationSummary,
   ProfileSummary,
   ProfilesResult,
@@ -106,7 +107,7 @@ function createBridge() {
     ),
     oauthSignIn: vi.fn(),
     listComputers: vi.fn(async () => [] as ComputerSummary[]),
-    getConversationEnv: vi.fn(async () => ({ selector: undefined })),
+    getConversationEnv: vi.fn(async (): Promise<ConversationEnv> => ({ selector: undefined })),
     setConversationEnv: vi.fn(async (_id: string, selector: ComputerSelectorField | null) => ({
       selector,
     })),
@@ -488,5 +489,91 @@ describe("pickImages", () => {
     });
     await state().pickImages();
     expect(state().notice).toBe("huge.png — over the 25MB limit");
+  });
+});
+
+describe("environment", () => {
+  beforeEach(connect);
+
+  const selector = { deviceId: "dev-1", connectionId: "conn-1", name: "MacBook" };
+
+  it("loads a conversation's environment when the chat opens", async () => {
+    bridge.getConversationEnv.mockResolvedValue({ selector: null });
+    state().openChat("conv-1");
+    await flush();
+    expect(bridge.getConversationEnv).toHaveBeenCalledWith("conv-1");
+    expect(state().conversationEnvs["conv-1"]).toEqual({ selector: null });
+  });
+
+  it("does not load an environment for the new chat", async () => {
+    state().openChat(null);
+    await flush();
+    expect(bridge.getConversationEnv).not.toHaveBeenCalled();
+  });
+
+  it("persists a pick and updates the mirror", async () => {
+    state().openChat("conv-1");
+    await state().pickEnvironment(selector);
+    expect(bridge.setConversationEnv).toHaveBeenCalledWith("conv-1", selector);
+    expect(state().conversationEnvs["conv-1"]).toEqual({ selector });
+    expect(bridge.setProfileEnvDefault).not.toHaveBeenCalled();
+  });
+
+  it("asDefault also writes the account default", async () => {
+    state().openChat("conv-1");
+    await state().pickEnvironment(selector, true);
+    expect(bridge.setProfileEnvDefault).toHaveBeenCalledWith(selector);
+    expect(state().profilesLoaded).toBe(true);
+  });
+
+  it("blocks a pick while the turn is running", async () => {
+    state().openChat("conv-1");
+    useAppStore.setState({
+      chats: {
+        "conv-1": {
+          rows: [],
+          loaded: true,
+          loading: false,
+          hasMore: false,
+          limit: 100,
+          running: true,
+          activity: null,
+          error: null,
+          approvals: [],
+          queue: [],
+        },
+      },
+    });
+    await state().pickEnvironment(selector);
+    expect(bridge.setConversationEnv).not.toHaveBeenCalled();
+    expect(state().notice).toMatch(/Wait for the current run/);
+  });
+
+  it("surfaces a failed save as a notice", async () => {
+    state().openChat("conv-1");
+    bridge.setConversationEnv.mockRejectedValue(new Error("Computer is offline: dev-1"));
+    await state().pickEnvironment(selector);
+    expect(state().notice).toBe("Computer is offline: dev-1");
+    expect(state().conversationEnvs["conv-1"]).toEqual({ selector: undefined });
+  });
+
+  it("refreshes the cloud computers list", async () => {
+    const computer: ComputerSummary = {
+      deviceId: "dev-1",
+      name: "MacBook",
+      connectionId: "conn-1",
+      status: "online",
+    };
+    bridge.listComputers.mockResolvedValue([computer]);
+    await state().refreshComputers();
+    expect(state().computers).toEqual([computer]);
+    expect(state().computersError).toBeNull();
+  });
+
+  it("records a computers listing failure", async () => {
+    bridge.listComputers.mockRejectedValue(new Error("cloud only"));
+    await state().refreshComputers();
+    expect(state().computers).toEqual([]);
+    expect(state().computersError).toBe("cloud only");
   });
 });

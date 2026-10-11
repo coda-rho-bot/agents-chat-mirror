@@ -10,6 +10,9 @@ import type {
   ApprovalRequest,
   ChatRow,
   ChatTextRow,
+  ComputerSelectorField,
+  ComputerSummary,
+  ConversationEnv,
   ConnectionState,
   ConversationSummary,
   MemoryFile,
@@ -88,6 +91,12 @@ type AppState = {
   /** Working directory and model picked in the composer but not yet sent. */
   cwdOverrides: Record<string, string>;
   modelOverrides: Record<string, string>;
+  /** Environment choice per conversation — the menu's source of truth. */
+  conversationEnvs: Record<string, ConversationEnv>;
+  /** Cloud computers for the environment menu (loaded lazily on open). */
+  computers: ComputerSummary[];
+  computersLoading: boolean;
+  computersError: string | null;
   /** The first message of a new chat, shown while its conversation is created. */
   pendingFirstMessage: ChatTextRow | null;
   notice: string | null;
@@ -113,6 +122,19 @@ type AppState = {
   updateAgent: (update: AgentUpdate) => Promise<AgentSummary>;
   deleteAgent: () => Promise<void>;
   openChat: (conversationId: string | null) => void;
+  /** Load one conversation's environment choice into the mirror. */
+  loadConversationEnv: (conversationId: string) => Promise<void>;
+  /** Refresh the cloud computers list for the environment menu. */
+  refreshComputers: () => Promise<void>;
+  /**
+   * Pick the environment for the active conversation: null = Cloud Sandbox.
+   * Blocked while the turn is running — per-turn sessions mean the pick
+   * applies to the next send, so changing it mid-run would mislead.
+   */
+  pickEnvironment: (
+    selector: ComputerSelectorField | null,
+    asDefault?: boolean,
+  ) => Promise<void>;
   loadHistory: (conversationId: string, limit?: number) => Promise<void>;
   /** True when the message actually went out; false when gated or failed. */
   send: (text: string, attachments?: AttachmentView[]) => Promise<boolean>;
@@ -180,6 +202,10 @@ const CLEARED = {
   conversationsLoaded: false,
   activeId: null,
   chats: {},
+  conversationEnvs: {},
+  computers: [],
+  computersLoading: false,
+  computersError: null,
   pendingFirstMessage: null,
 } satisfies Partial<AppState>;
 
@@ -428,6 +454,45 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!conversationId) return;
     const chat = get().chats[conversationId];
     if (!chat?.loaded && !chat?.loading) void get().loadHistory(conversationId);
+    void get().loadConversationEnv(conversationId);
+  },
+
+  loadConversationEnv: async (conversationId) => {
+    const env = await api.getConversationEnv(conversationId);
+    set((state) => ({ conversationEnvs: { ...state.conversationEnvs, [conversationId]: env } }));
+  },
+
+  refreshComputers: async () => {
+    set({ computersLoading: true, computersError: null });
+    try {
+      set({ computers: await api.listComputers(), computersLoading: false });
+    } catch (error) {
+      set({
+        computers: [],
+        computersLoading: false,
+        computersError: error instanceof Error ? error.message : "Couldn't load computers.",
+      });
+    }
+  },
+
+  pickEnvironment: async (selector, asDefault) => {
+    const conversationId = get().activeId;
+    if (!conversationId) return;
+    if (get().chats[conversationId]?.running) {
+      set({ notice: "Wait for the current run to finish before changing the environment." });
+      return;
+    }
+    try {
+      const env = await api.setConversationEnv(conversationId, selector);
+      set((state) => ({
+        conversationEnvs: { ...state.conversationEnvs, [conversationId]: env },
+      }));
+      if (asDefault) get().applyProfiles(await api.setProfileEnvDefault(selector));
+    } catch (error) {
+      set({
+        notice: error instanceof Error ? error.message : "Couldn't save the environment choice.",
+      });
+    }
   },
 
   loadHistory: async (conversationId, limit) => {
