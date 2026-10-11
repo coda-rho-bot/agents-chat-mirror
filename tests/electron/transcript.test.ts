@@ -156,6 +156,68 @@ describe("projectHistory", () => {
     );
     expect(rows).toEqual([]);
   });
+
+  it("re-attaches the images a persisted user message carried", () => {
+    const rows = projectHistory(
+      page(
+        {
+          message_type: "user_message",
+          otid: "o1",
+          content: [
+            {
+              type: "image",
+              source: { type: "base64", media_type: "image/jpeg", data: "aGk=" },
+            },
+            { type: "text", text: "describe this" },
+          ],
+        },
+        { message_type: "assistant_message", content: "a cat" },
+      ),
+    );
+    expect(rows[0]).toMatchObject({
+      kind: "user",
+      text: "describe this",
+      images: [
+        {
+          id: "att-message-0-0",
+          name: "image.jpg",
+          data: "aGk=",
+          mediaType: "image/jpeg",
+          width: 0,
+          height: 0,
+        },
+      ],
+    });
+  });
+
+  it("keeps an images-only send alive across a reload", () => {
+    const rows = projectHistory(
+      page({
+        message_type: "user_message",
+        otid: "o2",
+        content: [
+          { type: "image", source: { type: "base64", media_type: "image/jpeg", data: "aGk=" } },
+        ],
+      }),
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ kind: "user", text: "", images: [{ data: "aGk=" }] });
+  });
+
+  it("joins by otid when the history row has no message id", () => {
+    const rows = projectHistory(
+      page({
+        id: undefined,
+        message_type: "user_message",
+        otid: "o9",
+        content: [
+          { type: "image", source: { type: "base64", media_type: "image/jpeg", data: "aGk=" } },
+          { type: "text", text: "no envelope id" },
+        ],
+      }),
+    );
+    expect(rows[0]).toMatchObject({ kind: "user", images: [{ data: "aGk=" }] });
+  });
 });
 
 describe("mergeHistory", () => {

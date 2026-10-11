@@ -34,7 +34,13 @@ import {
   rememberCwd,
   setAgentId,
 } from "./settings.js";
-import { describeError, mergeHistory, projectHistory, toChatRow } from "./transcript.js";
+import {
+  describeError,
+  historyOtids,
+  mergeHistory,
+  projectHistory,
+  toChatRow,
+} from "./transcript.js";
 import { wireContent, type AttachmentView } from "./attachments.js";
 import { classifyResult, contentToText } from "@angus/letta-client-core";
 import { activeProfile, getProfileSecret, onProfileSignedOut } from "./profiles.js";
@@ -372,7 +378,7 @@ export async function loadHistory(conversationId: string, limit: number): Promis
   const page = await sdk.conversations.listMessages(conversationId, { limit, order: "desc" });
   const history = projectHistory(page.messages);
   const turn = turns.get(conversationId);
-  return {
+  const result = {
     rows: turn
       ? mergeHistory(
           history,
@@ -384,6 +390,10 @@ export async function loadHistory(conversationId: string, limit: number): Promis
     activity: turn?.activity ?? null,
     approvals: turn ? [...turn.approvals.values()].map((pending) => pending.request) : [],
   };
+  // The page is now the durable source for this conversation's images;
+  // otids it covers no longer need their in-memory staging copy.
+  for (const otid of historyOtids(page.messages)) pendingAttachments.delete(otid);
+  return result;
 }
 
 // --- Turns ------------------------------------------------------------------

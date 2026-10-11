@@ -92,21 +92,96 @@ function deniedToolCallIds(messages: readonly LettaConversationMessage[]): Set<s
   return denied;
 }
 
+/** Images a persisted user message carries, keyed by message id and otid. */
+function messageImages(messages: readonly LettaConversationMessage[]): {
+  byId: Map<string, AttachmentView[]>;
+  byOtid: Map<string, AttachmentView[]>;
+} {
+  const byId = new Map<string, AttachmentView[]>();
+  const byOtid = new Map<string, AttachmentView[]>();
+  for (const message of messages) {
+    const source = asRecord(message);
+    if (source?.message_type !== "user_message") continue;
+    const content = Array.isArray(source.content) ? source.content : [];
+    const images: AttachmentView[] = [];
+    content.forEach((part, index) => {
+      const record = asRecord(part);
+      const image = record?.type === "image" ? asRecord(record.source) : undefined;
+      if (!image || typeof image.data !== "string") return;
+      const data = image.data;
+      const id = source.id ?? source.otid ?? `message-${index}`;
+      images.push({
+        id: `att-${id}-${index}`,
+        // The wire part carries no filename or pixel size — only what the
+        // renderer needs to draw it. Zero size means "no aspect hint".
+        name: "image.jpg",
+        data,
+        mediaType: (typeof image.media_type === "string"
+          ? image.media_type
+          : "image/jpeg") as AttachmentView["mediaType"],
+        width: 0,
+        height: 0,
+      });
+    });
+    if (images.length === 0) continue;
+    if (typeof source.id === "string") byId.set(source.id, images);
+    if (typeof source.otid === "string") byOtid.set(source.otid, images);
+  }
+  return { byId, byOtid };
+}
+
+/**
+ * An images-only user message extracts no text, so the accumulator would
+ * drop it and the send would vanish on reload. Give those a blank text part
+ * before the rebase so the row survives; toChatRow trims it back to "".
+ */
+function withBlankTextPart(message: LettaConversationMessage): LettaConversationMessage {
+  const source = asRecord(message);
+  if (source?.message_type !== "user_message" || !Array.isArray(source.content)) return message;
+  const parts = source.content as unknown[];
+  const hasText = parts.some((part) => typeof part === "string" || asRecord(part)?.text);
+  const hasImage = parts.some((part) => asRecord(part)?.type === "image");
+  if (hasText || !hasImage) return message;
+  // Message is a union of envelope shapes; only the user_message variant
+  // reaches here, and the spread keeps its other envelope fields intact.
+  return { ...message, content: [...parts, { type: "text", text: " " }] } as LettaConversationMessage;
+}
+
+/** Envelope otids present in a history page, for pending-state cleanup. */
+export function historyOtids(messages: readonly LettaConversationMessage[]): Set<string> {
+  const otids = new Set<string>();
+  for (const message of messages) {
+    const otid = asRecord(message)?.otid;
+    if (typeof otid === "string") otids.add(otid);
+  }
+  return otids;
+}
+
 /** Project a persisted history page (newest first) into renderer rows. */
 export function projectHistory(messages: readonly LettaConversationMessage[]): ChatRow[] {
-  const rows = createTranscriptAccumulator().rebase(messages, { order: "desc" });
+  const rows = createTranscriptAccumulator().rebase(messages.map(withBlankTextPart), {
+    order: "desc",
+  });
   const denied = deniedToolCallIds(messages);
+  const { byId, byOtid } = messageImages(messages);
 
   const projected: ChatRow[] = [];
   for (const source of rows) {
-    const row = toChatRow(source);
+    // Join by message id first (row.uuid is the envelope id the accumulator
+    // recorded); otid is the fallback for rows the stream left without one.
+    const images =
+      source.kind !== "tool_call"
+        ? (source.uuid !== undefined ? byId.get(source.uuid) : undefined) ??
+          (source.otid !== undefined ? byOtid.get(source.otid) : undefined)
+        : undefined;
+    const row = toChatRow(source, images);
     if (row.kind === "tool_call") {
       projected.push(
         !row.result && denied.has(row.toolCallId)
           ? { ...row, status: "complete", result: { content: "Denied", isError: true } }
           : row,
       );
-    } else if (row.text) {
+    } else if (row.text || row.images) {
       projected.push(row);
     }
   }
