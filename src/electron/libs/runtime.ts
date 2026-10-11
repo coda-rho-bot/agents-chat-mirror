@@ -36,7 +36,7 @@ import {
 } from "./settings.js";
 import { describeError, mergeHistory, projectHistory, toChatRow } from "./transcript.js";
 import { classifyResult, contentToText } from "@angus/letta-client-core";
-import { activeProfile, getProfileSecret } from "./profiles.js";
+import { activeProfile, getProfileSecret, onProfileSignedOut } from "./profiles.js";
 
 /**
  * Everything that talks to Letta: the SDK client, agent and conversation
@@ -88,6 +88,12 @@ const conversations = new Map<string, ConversationSummary>();
 
 export function initRuntime(emitter: (event: AppEvent) => void): void {
   emit = emitter;
+  // A revoked OAuth session clears itself after repeated refresh refusals
+  // (profiles.ts); the renderer learns through this event and can prompt a
+  // fresh sign-in instead of a bare auth error one indirection away.
+  onProfileSignedOut((profileId) => {
+    emit({ type: "profile.signed-out", profileId });
+  });
   connection = { status: "connecting", backend: getConnectionConfig().backend };
   void ensureClient().catch(() => {
     // The failure is already reflected in the connection state.

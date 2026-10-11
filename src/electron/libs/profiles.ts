@@ -2,6 +2,7 @@ import { app } from "electron";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  OAuthTokenError,
   parseOAuthCredential,
   refreshOAuthCredential,
   revokeOAuthCredential,
@@ -86,6 +87,8 @@ export async function saveProfile(profile: Profile, secret: string | null): Prom
   // Empty secret means "keep the stored one" when editing.
   if (secret !== null && secret.length > 0) {
     await secrets().set(secretKey(profile.id), secret);
+    // A fresh credential resets any accumulated refresh-failure strikes.
+    failureStrikes.delete(profile.id);
   }
 }
 
@@ -134,12 +137,27 @@ export async function deleteProfile(id: string): Promise<void> {
 
 const refreshes = new Map<string, Promise<string | null>>();
 const deleting = new Set<string>();
+/** Consecutive refresh refusals per profile; two signs the session out. */
+const failureStrikes = new Map<string, number>();
+
+let signedOutNotifier: ((profileId: string) => void) | null = null;
+
+/** Register the listener fired when a profile's OAuth session is cleared. */
+export function onProfileSignedOut(listener: (profileId: string) => void): void {
+  signedOutNotifier = listener;
+}
 
 /**
  * The profile's secret, resolved at connect time. Plain API keys and server
  * tokens pass through; OAuth credentials return a live access token,
  * refreshing (single-flight, per profile) when expired. Returns null when
  * there is no secret — callers surface the ordinary auth error.
+ *
+ * A refused refresh (the server rejecting the token — OAuthTokenError, which
+ * the pinned core throws for any non-ok token response) counts as a strike;
+ * two consecutive refusals clear the credential and fire sign-out, so one
+ * transient server error never signs the user out. Network-shaped failures
+ * (offline, DNS) strike nothing.
  */
 export async function getProfileSecret(id: string): Promise<string | null> {
   if (deleting.has(id)) return null;
@@ -153,14 +171,62 @@ export async function getProfileSecret(id: string): Promise<string | null> {
   const refresh = refreshOAuthCredential(oauth)
     .then(async (refreshed) => {
       await secrets().set(secretKey(id), JSON.stringify(refreshed));
+      failureStrikes.delete(id);
       return refreshed.accessToken;
     })
-    .catch(() => null)
+    .catch(async (error) => {
+      if (error instanceof OAuthTokenError) {
+        const strikes = (failureStrikes.get(id) ?? 0) + 1;
+        if (strikes >= 2) {
+          failureStrikes.delete(id);
+          await secrets().delete(secretKey(id));
+          void refreshProfiles();
+          signedOutNotifier?.(id);
+        } else {
+          failureStrikes.set(id, strikes);
+        }
+      }
+      return null;
+    })
     .finally(() => {
       refreshes.delete(id);
     });
   refreshes.set(id, refresh);
   return refresh;
+}
+
+/**
+ * Sign out of a cloud OAuth profile: revoke the credential best-effort and
+ * drop the stored secret. The profile shell remains, for a fresh sign-in.
+ */
+export async function signOutProfile(id: string): Promise<void> {
+  const profile = (await listProfiles()).find((p) => p.id === id);
+  if (!profile) return;
+  if (profile.authMethod !== "oauth") {
+    throw new Error("Only Letta Cloud sign-in profiles can sign out.");
+  }
+  deleting.add(id);
+  try {
+    // Wait out an in-flight refresh so it cannot write the credential back.
+    try {
+      await refreshes.get(id);
+    } catch {
+      // Revoke the last stored credential below.
+    }
+    const raw = await secrets().get(secretKey(id));
+    const oauth = raw ? parseOAuthCredential(raw) : null;
+    if (oauth) {
+      try {
+        await revokeOAuthCredential(oauth);
+      } catch {
+        // Local sign-out must still work when the account is offline.
+      }
+    }
+    await secrets().delete(secretKey(id));
+  } finally {
+    deleting.delete(id);
+  }
+  await refreshProfiles();
 }
 
 export async function hasSecret(id: string): Promise<boolean> {

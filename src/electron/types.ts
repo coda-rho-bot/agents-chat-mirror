@@ -204,6 +204,7 @@ export type AppEvent =
   | { type: "approval.requested"; conversationId: string; request: ApprovalRequest }
   | { type: "approval.resolved"; conversationId: string; requestId: string }
   | { type: "conversation.updated"; conversation: ConversationSummary }
+  | { type: "profile.signed-out"; profileId: string }
   | { type: "menu"; command: "new-chat" | "settings" };
 
 /** Renderer -> main requests. Every method is an `ipcRenderer.invoke` round trip. */

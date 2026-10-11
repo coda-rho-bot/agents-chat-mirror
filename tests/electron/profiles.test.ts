@@ -23,9 +23,13 @@ vi.mock("electron", () => ({
 const refreshOAuthCredential = vi.fn();
 const revokeOAuthCredential = vi.fn();
 
+// Stable identity across vi.resetModules, so instanceof in profiles.ts holds.
+class FakeOAuthTokenError extends Error {}
+
 // The token endpoints stay mocked; parsing stays real.
 vi.mock("@angus/letta-client-core", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@angus/letta-client-core")>()),
+  OAuthTokenError: FakeOAuthTokenError,
   refreshOAuthCredential: (...args: unknown[]) => refreshOAuthCredential(...(args as [])),
   revokeOAuthCredential: (...args: unknown[]) => revokeOAuthCredential(...(args as [])),
 }));
@@ -240,5 +244,102 @@ describe("misc", () => {
     expect(await profiles.migrationDone()).toBe(true);
     await restart();
     expect(await profiles.migrationDone()).toBe(true);
+  });
+});
+
+describe("refresh-failure sign-out", () => {
+  const expired = () => credential({ expiresAt: Date.now() - 1_000 });
+  const profileOf = (id: string) => ({ id, type: "cloud" as const, name: "Letta Cloud", url: "", createdAt: 1 });
+
+  it("keeps the credential after a single refused refresh", async () => {
+    const id = profiles.newProfileId();
+    await profiles.saveOAuthProfile(profileOf(id), expired());
+    refreshOAuthCredential.mockRejectedValue(new FakeOAuthTokenError("invalid_grant"));
+    expect(await profiles.getProfileSecret(id)).toBeNull();
+    expect(await profiles.hasSecret(id)).toBe(true);
+  });
+
+  it("clears the credential and fires sign-out after two consecutive refusals", async () => {
+    const id = profiles.newProfileId();
+    await profiles.saveOAuthProfile(profileOf(id), expired());
+    const signedOut = vi.fn();
+    profiles.onProfileSignedOut(signedOut);
+    refreshOAuthCredential.mockRejectedValue(new FakeOAuthTokenError("invalid_grant"));
+
+    expect(await profiles.getProfileSecret(id)).toBeNull();
+    expect(await profiles.hasSecret(id)).toBe(true);
+    expect(signedOut).not.toHaveBeenCalled();
+
+    expect(await profiles.getProfileSecret(id)).toBeNull();
+    expect(await profiles.hasSecret(id)).toBe(false);
+    expect(signedOut).toHaveBeenCalledTimes(1);
+    expect(signedOut).toHaveBeenCalledWith(id);
+  });
+
+  it("resets the strike count after a successful refresh", async () => {
+    const id = profiles.newProfileId();
+    await profiles.saveOAuthProfile(profileOf(id), expired());
+    refreshOAuthCredential.mockRejectedValueOnce(new FakeOAuthTokenError("invalid_grant"));
+    expect(await profiles.getProfileSecret(id)).toBeNull();
+
+    // Resolves within the refresh skew, so the next call refreshes again.
+    refreshOAuthCredential.mockResolvedValueOnce(
+      credential({ accessToken: "at-new", expiresAt: Date.now() + 30_000 }),
+    );
+    expect(await profiles.getProfileSecret(id)).toBe("at-new");
+
+    refreshOAuthCredential.mockRejectedValueOnce(new FakeOAuthTokenError("invalid_grant"));
+    expect(await profiles.getProfileSecret(id)).toBeNull();
+    expect(await profiles.hasSecret(id)).toBe(true);
+  });
+
+  it("does not strike on network-shaped failures", async () => {
+    const id = profiles.newProfileId();
+    await profiles.saveOAuthProfile(profileOf(id), expired());
+    const signedOut = vi.fn();
+    profiles.onProfileSignedOut(signedOut);
+    refreshOAuthCredential.mockRejectedValue(new TypeError("fetch failed"));
+
+    expect(await profiles.getProfileSecret(id)).toBeNull();
+    expect(await profiles.getProfileSecret(id)).toBeNull();
+    expect(await profiles.hasSecret(id)).toBe(true);
+    expect(signedOut).not.toHaveBeenCalled();
+  });
+});
+
+describe("sign out", () => {
+  const profileOf = (id: string) => ({ id, type: "cloud" as const, name: "Letta Cloud", url: "", createdAt: 1 });
+
+  it("revokes best-effort, clears the secret, and keeps the profile shell", async () => {
+    const id = profiles.newProfileId();
+    await profiles.saveOAuthProfile(profileOf(id), credential());
+    revokeOAuthCredential.mockResolvedValue(undefined);
+
+    await profiles.signOutProfile(id);
+    expect(revokeOAuthCredential).toHaveBeenCalledTimes(1);
+    expect(await profiles.hasSecret(id)).toBe(false);
+    expect(await profiles.listProfiles()).toHaveLength(1);
+
+    await profiles.loadProfiles();
+    expect(profiles.profileHasSecret(id)).toBe(false);
+  });
+
+  it("still signs out when revocation fails (offline)", async () => {
+    const id = profiles.newProfileId();
+    await profiles.saveOAuthProfile(profileOf(id), credential());
+    revokeOAuthCredential.mockRejectedValue(new Error("offline"));
+
+    await profiles.signOutProfile(id);
+    expect(await profiles.hasSecret(id)).toBe(false);
+  });
+
+  it("rejects sign-out for non-oauth profiles", async () => {
+    const id = profiles.newProfileId();
+    await profiles.saveProfile(
+      { id, type: "cloud", name: "Work", url: "", authMethod: "api_key", createdAt: 1 },
+      "sk-1",
+    );
+    await expect(profiles.signOutProfile(id)).rejects.toThrow(/sign/i);
+    expect(await profiles.hasSecret(id)).toBe(true);
   });
 });
