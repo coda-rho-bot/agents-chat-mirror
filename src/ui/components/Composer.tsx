@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { folderName, shortPath } from "../lib/format";
+import { dedupeComputers, effectiveSelector, envLabel, selectorMatchesComputer } from "../lib/env";
 import { NEW_CHAT, selectCwd, selectModel, useAppStore } from "../store";
 import type { AttachmentView, PermissionMode } from "../types";
 import { ModelPicker } from "./ModelPicker";
@@ -10,6 +11,7 @@ import {
   ChevronDownIcon,
   CloseIcon,
   FolderIcon,
+  MonitorIcon,
   PaperclipIcon,
   ShieldIcon,
   StopIcon,
@@ -32,6 +34,111 @@ const menuContent =
   "z-50 min-w-[240px] rounded-xl border border-border bg-surface p-1 shadow-elevated";
 const menuItem =
   "flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-sm text-ink-800 outline-none data-[highlighted]:bg-surface-tertiary";
+const menuCheck = "h-4 w-4 shrink-0 text-accent";
+const menuCheckBlank = "h-4 w-4 shrink-0";
+
+function EnvironmentMenu() {
+  const activeId = useAppStore((state) => state.activeId);
+  const conversationEnvs = useAppStore((state) => state.conversationEnvs);
+  const computers = useAppStore((state) => state.computers);
+  const computersLoading = useAppStore((state) => state.computersLoading);
+  const computersError = useAppStore((state) => state.computersError);
+  const refreshComputers = useAppStore((state) => state.refreshComputers);
+  const pickEnvironment = useAppStore((state) => state.pickEnvironment);
+  const profileDefault = useAppStore(
+    (state) =>
+      state.profiles.find((p) => p.id === state.settings?.activeProfileId)?.computerSelector,
+  );
+  const [asDefault, setAsDefault] = useState(false);
+
+  // The conversation is guaranteed by the render gate; narrowing for TS.
+  if (!activeId) return null;
+
+  const online = dedupeComputers(computers).filter((c) => c.status === "online");
+  const effective = effectiveSelector(conversationEnvs[activeId], profileDefault);
+
+  return (
+    <DropdownMenu.Root
+      onOpenChange={(open) => {
+        if (open && computers.length === 0 && !computersError) void refreshComputers();
+      }}
+    >
+      <DropdownMenu.Trigger
+        className="chip"
+        title="Environment the agent runs in — applies to your next message"
+      >
+        <MonitorIcon className="h-3.5 w-3.5 shrink-0" />
+        <span className="truncate">{envLabel(effective)}</span>
+        <ChevronDownIcon className="h-3 w-3 shrink-0" />
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content className={menuContent} side="top" align="start" sideOffset={8}>
+          <DropdownMenu.Label className="px-3 pb-1 pt-2 text-xs text-muted">
+            The agent runs on
+          </DropdownMenu.Label>
+          <DropdownMenu.Item className={menuItem} onSelect={() => void pickEnvironment(null, asDefault)}>
+            {effective === null ? <CheckIcon className={menuCheck} /> : <span className={menuCheckBlank} />}
+            <span className="truncate">Cloud Sandbox</span>
+          </DropdownMenu.Item>
+          {online.map((computer) => (
+            <DropdownMenu.Item
+              key={computer.deviceId}
+              className={menuItem}
+              onSelect={() =>
+                void pickEnvironment(
+                  {
+                    deviceId: computer.deviceId,
+                    connectionId: computer.connectionId ?? "",
+                    name: computer.name,
+                  },
+                  asDefault,
+                )
+              }
+            >
+              {selectorMatchesComputer(effective, computer) ? (
+                <CheckIcon className={menuCheck} />
+              ) : (
+                <span className={menuCheckBlank} />
+              )}
+              <span className="truncate" title={computer.name}>
+                {computer.name}
+              </span>
+            </DropdownMenu.Item>
+          ))}
+          {computersLoading && (
+            <DropdownMenu.Item className={menuItem} disabled>
+              <span className={menuCheckBlank} />
+              <span className="text-muted">Loading computers…</span>
+            </DropdownMenu.Item>
+          )}
+          {!computersLoading && computersError && (
+            <DropdownMenu.Item className={menuItem} disabled>
+              <span className={menuCheckBlank} />
+              <span className="truncate text-muted" title={computersError}>
+                {computersError}
+              </span>
+            </DropdownMenu.Item>
+          )}
+          {!computersLoading && !computersError && online.length === 0 && (
+            <DropdownMenu.Item className={menuItem} disabled>
+              <span className={menuCheckBlank} />
+              <span className="text-muted">No computers online</span>
+            </DropdownMenu.Item>
+          )}
+          <DropdownMenu.Separator className="my-1 h-px bg-border" />
+          <DropdownMenu.CheckboxItem
+            checked={asDefault}
+            onCheckedChange={setAsDefault}
+            className={menuItem}
+          >
+            {asDefault ? <CheckIcon className={menuCheck} /> : <span className={menuCheckBlank} />}
+            Use for new conversations
+          </DropdownMenu.CheckboxItem>
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  );
+}
 
 function FolderMenu({ cwd }: { cwd: string }) {
   const recentCwds = useAppStore((state) => state.settings?.recentCwds ?? NO_FOLDERS);
@@ -111,6 +218,7 @@ function PermissionMenu() {
 
 export function Composer({ disabled }: { disabled: boolean }) {
   const activeId = useAppStore((state) => state.activeId);
+  const isCloud = useAppStore((state) => state.connection?.backend === "cloud");
   const key = activeId ?? NEW_CHAT;
   const draft = useAppStore((state) => state.drafts[key] ?? "");
   const running = useAppStore((state) =>
@@ -203,6 +311,7 @@ export function Composer({ disabled }: { disabled: boolean }) {
           <div className="flex min-w-0 flex-1 items-center gap-1.5">
             <FolderMenu cwd={cwd} />
             <ModelPicker value={model} models={models} onChange={setModel} className="min-w-0" />
+            {isCloud && activeId && <EnvironmentMenu />}
             <PermissionMenu />
             <button
               type="button"

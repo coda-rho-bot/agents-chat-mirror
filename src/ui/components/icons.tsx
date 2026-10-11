@@ -80,6 +80,14 @@ export const PaperclipIcon = (props: IconProps) => (
   </Icon>
 );
 
+export const MonitorIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M3 4h18v12H3z" />
+    <path d="M8 20h8" />
+    <path d="M12 16v4" />
+  </Icon>
+);
+
 export const SettingsIcon = (props: IconProps) => (
   <Icon {...props}>
     <circle cx="12" cy="12" r="3" />
