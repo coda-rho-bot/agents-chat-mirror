@@ -393,7 +393,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     const { agentId, activeId } = state;
     if (!text || !agentId) return;
     const key = activeId ?? NEW_CHAT;
-    if (activeId ? state.chats[activeId]?.running : state.pendingFirstMessage) return;
+    // Mid-run sends queue server-side for EXISTING conversations — do not
+    // gate on running there (PR #8; matches the runtime change). The
+    // first-message path still needs its single-flight guard.
+    if (activeId ? false : state.pendingFirstMessage) return;
 
     const otid = crypto.randomUUID();
     const userRow = optimisticUserRow(text, otid);

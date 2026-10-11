@@ -505,11 +505,20 @@ export async function sendMessage(input: SendMessageInput): Promise<Conversation
   const sdk = await ensureClient();
   const text = input.text.trim();
   if (!text) throw new Error("Message is empty.");
-  // Mid-run sends are ALLOWED: the server queues them (delivered when the
-  // current run finishes; surfaced via queue_update frames). Android parity —
-  // the queue renders in-UI and items are removable before delivery.
-  // The send still opens its own session below; the active turn's stream
-  // will observe the queue_update on its next frame.
+
+  // Mid-run send on an existing conversation: route through the ACTIVE
+  // turn's session (the server queues it behind the busy run; the active
+  // stream observes the queue_update). Never create a second Turn — that
+  // would orphan Stop (aborting the wrong session) and race finishTurn.
+  if (input.conversationId) {
+    const active = turns.get(input.conversationId);
+    if (active && !active.finished) {
+      await active.session.send(text, { otid: input.otid });
+      const known = conversations.get(input.conversationId);
+      if (!known) throw new Error("Conversation is not loaded.");
+      return known;
+    }
+  }
 
   let conversation: ConversationSummary;
   if (input.conversationId) {

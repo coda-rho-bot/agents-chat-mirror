@@ -254,12 +254,14 @@ describe("sending", () => {
     expect(state().chats["conv-1"]).toMatchObject({ running: false, rows: [] });
   });
 
-  it("does not send while the chat is still working, or when the text is blank", async () => {
+  it("mid-run sends go through (queued server-side), blank text still blocked", async () => {
+    bridge.sendMessage.mockResolvedValue(conversation("conv-1"));
     useAppStore.setState({ activeId: "conv-1" });
     state().handleEvent({ type: "turn.started", conversationId: "conv-1" });
-    await state().send("again");
+    await state().send("queued follow-up");
+    expect(bridge.sendMessage).toHaveBeenCalledTimes(1);
     await state().send("   ");
-    expect(bridge.sendMessage).not.toHaveBeenCalled();
+    expect(bridge.sendMessage).toHaveBeenCalledTimes(1);
   });
 
   it("sends a model only when the user picked a different one for the chat", async () => {
