@@ -3,7 +3,7 @@ import {
   type LettaConversationMessage,
   type TranscriptRow,
 } from "@letta-ai/letta-agent-sdk";
-import type { ChatRow } from "../types.js";
+import type { AttachmentView, ChatRow } from "../types.js";
 
 // Phase 2 wire-up: terminal doctrine comes from the shared core (one
 // implementation, two shells). Projection stays local for now — desktop's
@@ -34,7 +34,7 @@ function clip(text: string): string {
   return `${text.slice(0, MAX_TOOL_OUTPUT_CHARS)}\n... ${hidden.toLocaleString()} more characters`;
 }
 
-export function toChatRow(row: TranscriptRow): ChatRow {
+export function toChatRow(row: TranscriptRow, images?: AttachmentView[]): ChatRow {
   if (row.kind === "tool_call") {
     return {
       kind: "tool_call",
@@ -53,6 +53,7 @@ export function toChatRow(row: TranscriptRow): ChatRow {
     key: row.key,
     text: row.kind === "user" ? row.text.replace(SYSTEM_REMINDER, "").trim() : row.text,
     ...(row.otid ? { otid: row.otid } : {}),
+    ...(row.kind === "user" && images && images.length > 0 ? { images } : {}),
   };
 }
 

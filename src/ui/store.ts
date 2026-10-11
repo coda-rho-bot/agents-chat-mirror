@@ -4,6 +4,7 @@ import type {
   AgentSummary,
   AgentUpdate,
   AppEvent,
+  AttachmentView,
   AppSettings,
   ApprovalDecision,
   ApprovalRequest,
@@ -113,7 +114,7 @@ type AppState = {
   deleteAgent: () => Promise<void>;
   openChat: (conversationId: string | null) => void;
   loadHistory: (conversationId: string, limit?: number) => Promise<void>;
-  send: (text: string) => Promise<void>;
+  send: (text: string, attachments?: AttachmentView[]) => Promise<void>;
   stop: () => void;
   respondApproval: (requestId: string, decision: ApprovalDecision) => void;
   removeQueued: (conversationId: string, itemId: string) => void;
@@ -454,11 +455,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  send: async (rawText) => {
+  send: async (rawText, attachments = []) => {
     const text = rawText.trim();
     const state = get();
     const { agentId, activeId } = state;
-    if (!text || !agentId) return;
+    if ((!text && attachments.length === 0) || !agentId) return;
     const key = activeId ?? NEW_CHAT;
     // Mid-run sends queue server-side for EXISTING conversations — do not
     // gate on running there (PR #8; matches the runtime change). The
@@ -466,7 +467,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (activeId ? false : state.pendingFirstMessage) return;
 
     const otid = crypto.randomUUID();
-    const userRow = optimisticUserRow(text, otid);
+    const userRow = optimisticUserRow(text, otid, attachments);
     const cwd = selectCwd(state, key);
     const pickedModel = state.modelOverrides[key];
     const currentModel = state.conversations.find((item) => item.id === activeId)?.model;
@@ -504,6 +505,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         otid,
         cwd,
         ...(model ? { model } : {}),
+        ...(attachments.length > 0 ? { attachments } : {}),
       });
       set((current) => ({
         conversations: upsertConversation(current.conversations, {

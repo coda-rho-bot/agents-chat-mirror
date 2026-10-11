@@ -35,6 +35,7 @@ import {
   setAgentId,
 } from "./settings.js";
 import { describeError, mergeHistory, projectHistory, toChatRow } from "./transcript.js";
+import { wireContent, type AttachmentView } from "./attachments.js";
 import { classifyResult, contentToText } from "@angus/letta-client-core";
 import { activeProfile, getProfileSecret, onProfileSignedOut } from "./profiles.js";
 
@@ -84,6 +85,14 @@ let connecting: Promise<LettaAgentClient> | null = null;
 let connection: ConnectionState = { status: "connecting", backend: "local" };
 
 const turns = new Map<string, Turn>();
+/**
+ * Attachments behind sent messages, keyed by otid — stamps the echo row the
+ * accumulator flushes (and any retry re-flush). In-memory only: after an app
+ * restart an unflushed-but-sent message renders text-only until history
+ * reconciliation re-attaches the images (no split-loss risk — unsent
+ * messages drop text and images together).
+ */
+const pendingAttachments = new Map<string, AttachmentView[]>();
 const conversations = new Map<string, ConversationSummary>();
 
 export function initRuntime(emitter: (event: AppEvent) => void): void {
@@ -364,7 +373,12 @@ export async function loadHistory(conversationId: string, limit: number): Promis
   const history = projectHistory(page.messages);
   const turn = turns.get(conversationId);
   return {
-    rows: turn ? mergeHistory(history, turn.accumulator.rows().map(toChatRow)) : history,
+    rows: turn
+      ? mergeHistory(
+          history,
+          turn.accumulator.rows().map((row) => stampImages(row)),
+        )
+      : history,
     hasMore: page.hasMore ?? page.messages.length >= limit,
     running: Boolean(turn),
     activity: turn?.activity ?? null,
@@ -385,11 +399,16 @@ function flushRows(turn: Turn): void {
   for (const row of turn.accumulator.rows()) {
     if (turn.sent.get(row.key) === row) continue;
     turn.sent.set(row.key, row);
-    changed.push(toChatRow(row));
+    changed.push(stampImages(row));
   }
   if (changed.length > 0) {
     emit({ type: "turn.rows", conversationId: turn.conversationId, rows: changed });
   }
+}
+
+/** A user row carries the attachments staged behind its otid, if any. */
+function stampImages(row: TranscriptRow): ChatRow {
+  return toChatRow(row, row.otid ? pendingAttachments.get(row.otid) : undefined);
 }
 
 function scheduleFlush(turn: Turn): void {
@@ -443,7 +462,7 @@ async function runTurn(turn: Turn, text: string, otid: string): Promise<void> {
     // A conversation left waiting on an approval (for example, the app quit
     // mid-turn) stays wedged until the runtime re-drives it through canUseTool.
     await turn.session.recoverPendingApprovals({ timeoutMs: 5_000 }).catch(() => undefined);
-    await turn.session.send(text, { otid });
+    await turn.session.send(wireContent(text, pendingAttachments.get(otid) ?? []), { otid });
 
     for await (const message of turn.session.stream()) {
       if (turn.finished) return;
@@ -520,7 +539,9 @@ export async function removeQueuedMessage(conversationId: string, itemId: string
 export async function sendMessage(input: SendMessageInput): Promise<ConversationSummary> {
   const sdk = await ensureClient();
   const text = input.text.trim();
-  if (!text) throw new Error("Message is empty.");
+  const attachments = input.attachments ?? [];
+  if (!text && attachments.length === 0) throw new Error("Message is empty.");
+  if (attachments.length > 0) pendingAttachments.set(input.otid, attachments);
 
   // Mid-run send on an existing conversation: route through the ACTIVE
   // turn's session (the server queues it behind the busy run; the active
@@ -529,7 +550,7 @@ export async function sendMessage(input: SendMessageInput): Promise<Conversation
   if (input.conversationId) {
     const active = turns.get(input.conversationId);
     if (active && !active.finished) {
-      await active.session.send(text, { otid: input.otid });
+      await active.session.send(wireContent(text, attachments), { otid: input.otid });
       const known = conversations.get(input.conversationId);
       if (!known) throw new Error("Conversation is not loaded.");
       return known;
@@ -543,12 +564,15 @@ export async function sendMessage(input: SendMessageInput): Promise<Conversation
       toConversationSummary(await sdk.conversations.retrieve(input.conversationId));
     if (!conversation.title) {
       conversation = toConversationSummary(
-        await sdk.conversations.update(conversation.id, { summary: titleFrom(text) }),
+        await sdk.conversations.update(conversation.id, { summary: titleFrom(text) || "Image" }),
       );
     }
   } else {
     conversation = toConversationSummary(
-      await sdk.conversations.create({ agentId: input.agentId, summary: titleFrom(text) }),
+      await sdk.conversations.create({
+        agentId: input.agentId,
+        summary: titleFrom(text) || "Image",
+      }),
     );
   }
 

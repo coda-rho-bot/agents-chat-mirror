@@ -419,3 +419,43 @@ describe("profiles", () => {
     expect(state().settings?.activeProfileId).toBeNull();
   });
 });
+
+describe("sending with attachments", () => {
+  beforeEach(() => {
+    bridge.sendMessage.mockResolvedValue(conversation("conv-1"));
+  });
+
+  const attachment = {
+    id: "att-1",
+    name: "shot.png",
+    data: "aGk=",
+    mediaType: "image/jpeg" as const,
+    width: 4,
+    height: 4,
+  };
+
+  it("stages the images on the optimistic row and passes them to the runtime", async () => {
+    useAppStore.setState({ agentId: "agent-1", activeId: "conv-1" });
+    await state().send("look", [attachment]);
+
+    expect(bridge.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "look", attachments: [attachment] }),
+    );
+    const row = state().chats["conv-1"]?.rows.find((item) => item.kind === "user");
+    expect(row).toMatchObject({ images: [attachment] });
+  });
+
+  it("allows an images-only send", async () => {
+    useAppStore.setState({ agentId: "agent-1", activeId: "conv-1" });
+    await state().send("", [attachment]);
+    expect(bridge.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "", attachments: [attachment] }),
+    );
+  });
+
+  it("still refuses a send with neither text nor images", async () => {
+    useAppStore.setState({ agentId: "agent-1", activeId: "conv-1" });
+    await state().send("");
+    expect(bridge.sendMessage).not.toHaveBeenCalled();
+  });
+});

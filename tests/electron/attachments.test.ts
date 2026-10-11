@@ -1,6 +1,6 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type Attachments = typeof import("../../src/electron/libs/attachments");
@@ -35,7 +35,8 @@ const images = new Map<string, ReturnType<typeof fakeImage>>();
 function fakeImageFromPath(path: string) {
   const existing = images.get(path);
   if (existing) return existing;
-  const match = path.match(/(\d+)x(\d+)/);
+  // Basename only — the mkdtemp suffix can itself contain a digits-x-digits run.
+  const match = basename(path).match(/(\d+)x(\d+)/);
   const image = fakeImage(match ? Number(match[1]) : 800, match ? Number(match[2]) : 600);
   images.set(path, image);
   return image;
@@ -138,5 +139,28 @@ describe("toImageContent", () => {
       type: "image",
       source: { type: "base64", media_type: "image/jpeg", data: view.data },
     });
+  });
+});
+
+describe("wireContent", () => {
+  it("keeps plain text as a plain string", () => {
+    expect(attachments.wireContent("hello", [])).toBe("hello");
+  });
+
+  it("puts images ahead of the text so the model reads them as context", () => {
+    const view = attachments.intakeImage(imageFile("shot-800x600.png"));
+    const content = attachments.wireContent("describe this", [view]);
+    expect(content).toEqual([
+      { type: "image", source: { type: "base64", media_type: "image/jpeg", data: view.data } },
+      { type: "text", text: "describe this" },
+    ]);
+  });
+
+  it("allows an images-only send with no text part", () => {
+    const view = attachments.intakeImage(imageFile("shot-800x600.png"));
+    const content = attachments.wireContent("", [view]);
+    expect(content).toEqual([
+      { type: "image", source: { type: "base64", media_type: "image/jpeg", data: view.data } },
+    ]);
   });
 });

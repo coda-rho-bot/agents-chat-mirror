@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { LettaConversationMessage } from "@letta-ai/letta-agent-sdk";
+import type { LettaConversationMessage, TranscriptRow } from "@letta-ai/letta-agent-sdk";
 import {
   describeError,
   mergeHistory,
@@ -43,6 +43,36 @@ describe("describeError", () => {
   it("never returns an empty message", () => {
     expect(describeError("")).toBe("Something went wrong.");
     expect(describeError(undefined)).toBe("Something went wrong.");
+  });
+});
+
+describe("toChatRow image stamping", () => {
+  const images = [
+    { id: "att-1", name: "shot.png", data: "aGk=", mediaType: "image/jpeg" as const, width: 4, height: 4 },
+  ];
+
+  it("stamps a user row with the attachments staged behind its otid", () => {
+    const row = toChatRow(
+      { kind: "user", key: "user:otid:o1", text: "hello", otid: "o1" } as TranscriptRow,
+      images,
+    );
+    expect(row).toMatchObject({ kind: "user", text: "hello", otid: "o1", images });
+  });
+
+  it("never stamps non-user rows", () => {
+    const row = toChatRow(
+      { kind: "assistant", key: "assistant:1", text: "hi" } as TranscriptRow,
+      images,
+    );
+    expect("images" in row).toBe(false);
+  });
+
+  it("omits the images field when the list is empty", () => {
+    const row = toChatRow(
+      { kind: "user", key: "user:otid:o1", text: "hello", otid: "o1" } as TranscriptRow,
+      [],
+    );
+    expect("images" in row).toBe(false);
   });
 });
 

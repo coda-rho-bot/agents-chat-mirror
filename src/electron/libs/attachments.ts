@@ -1,6 +1,7 @@
 import { statSync } from "node:fs";
 import { basename } from "node:path";
 import { nativeImage } from "electron";
+import type { ImageContent, SendMessage } from "@letta-ai/letta-agent-sdk";
 
 /**
  * Image attachment intake for the composer.
@@ -72,14 +73,27 @@ export function intakeImage(path: string): AttachmentView {
 }
 
 /** Attachment views as SDK image content parts (base64, no data: prefix). */
-export function toImageContent(attachments: readonly AttachmentView[]): Array<{
-  type: "image";
-  source: { type: "base64"; media_type: string; data: string };
-}> {
+export function toImageContent(attachments: readonly AttachmentView[]): ImageContent[] {
   return attachments.map((attachment) => ({
     type: "image" as const,
     source: { type: "base64" as const, media_type: attachment.mediaType, data: attachment.data },
   }));
+}
+
+/**
+ * The wire payload for a send: images LEAD the content array so the model
+ * reads them as context for the instruction (Android order); plain text
+ * stays a plain string.
+ */
+export function wireContent(
+  text: string,
+  attachments: readonly AttachmentView[],
+): SendMessage {
+  if (attachments.length === 0) return text;
+  return [
+    ...toImageContent(attachments),
+    ...(text ? [{ type: "text" as const, text }] : []),
+  ];
 }
 
 /**

@@ -71,3 +71,15 @@ describe("mergeHistory", () => {
     expect(mergeHistory([saved], [optimistic])).toEqual([saved]);
   });
 });
+
+describe("optimisticUserRow", () => {
+  it("carries staged images so the echo renders them before the server replies", () => {
+    const images = [{ id: "att-1", name: "shot.png", data: "aGk=", mediaType: "image/jpeg" as const, width: 4, height: 4 }];
+    const row = optimisticUserRow("hello", "o1", images);
+    expect(row.images).toEqual(images);
+  });
+
+  it("omits the images field entirely when none are staged", () => {
+    expect("images" in optimisticUserRow("hello", "o1")).toBe(false);
+  });
+});

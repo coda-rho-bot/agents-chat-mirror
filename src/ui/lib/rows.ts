@@ -1,4 +1,4 @@
-import type { ChatRow, ChatTextRow } from "../types";
+import type { AttachmentView, ChatRow, ChatTextRow } from "../types";
 
 /**
  * Identity used to reconcile a row across the live stream, restored history,
@@ -33,6 +33,16 @@ export function mergeHistory(history: ChatRow[], current: ChatRow[]): ChatRow[] 
 }
 
 /** The row drawn for a message the moment the user sends it. */
-export function optimisticUserRow(text: string, otid: string): ChatTextRow {
-  return { kind: "user", key: `user:otid:${otid}`, text, otid };
+export function optimisticUserRow(
+  text: string,
+  otid: string,
+  images?: AttachmentView[],
+): ChatTextRow {
+  return {
+    kind: "user",
+    key: `user:otid:${otid}`,
+    text,
+    otid,
+    ...(images && images.length > 0 ? { images } : {}),
+  };
 }
