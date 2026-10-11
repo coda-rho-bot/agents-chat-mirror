@@ -209,6 +209,7 @@ export type AppRequests = {
   updateSettings(update: SettingsUpdate): AppSettings;
   getConnection(): ConnectionState;
   reconnect(): ConnectionState;
+  oauthSignIn(): { ok: true; apiKey: string } | { ok: false; error: string };
   listAgents(): AgentSummary[];
   createAgent(input: { name: string; model?: string }): AgentSummary;
   getAgent(agentId: string): AgentDetails;

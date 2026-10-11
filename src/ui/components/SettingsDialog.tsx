@@ -47,6 +47,7 @@ function Field({
 }
 
 function SettingsForm({ settings, onClose }: { settings: AppSettings; onClose: () => void }) {
+  const api = window.bridge;
   const connection = useAppStore((state) => state.connection);
   const saveSettings = useAppStore((state) => state.saveSettings);
   const reconnect = useAppStore((state) => state.reconnect);
@@ -58,6 +59,25 @@ function SettingsForm({ settings, onClose }: { settings: AppSettings; onClose: (
   const [serverToken, setServerToken] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [signingIn, setSigningIn] = useState(false);
+
+  const signInWithLetta = async () => {
+    setSigningIn(true);
+    setError(null);
+    try {
+      const result = await api.oauthSignIn();
+      if (result.ok) {
+        await saveSettings({ backend: "cloud", apiKey: result.apiKey });
+        setBackend("cloud");
+      } else {
+        setError(result.error);
+      }
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : String(failure));
+    } finally {
+      setSigningIn(false);
+    }
+  };
 
   const save = async () => {
     setSaving(true);
@@ -134,6 +154,19 @@ function SettingsForm({ settings, onClose }: { settings: AppSettings; onClose: (
               className="field font-mono"
             />
           </Field>
+          <div className="flex items-center justify-between gap-3">
+            <button
+              type="button"
+              onClick={() => void signInWithLetta()}
+              disabled={signingIn}
+              className="btn"
+            >
+              {signingIn ? "Waiting for browser…" : "Sign in with Letta"}
+            </button>
+            <span className="text-sm opacity-60">
+              Opens your browser; returns here when signed in.
+            </span>
+          </div>
           <Field label="API base URL" hint="Optional. Leave empty for api.letta.com.">
             <input
               value={apiBaseUrl}

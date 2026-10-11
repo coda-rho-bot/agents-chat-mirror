@@ -70,6 +70,7 @@ function createBridge() {
     stopTurn: vi.fn(),
     respondApproval: vi.fn(),
     selectDirectory: vi.fn(),
+    oauthSignIn: vi.fn(),
   } satisfies Record<keyof AppBridge, unknown>;
 }
 
