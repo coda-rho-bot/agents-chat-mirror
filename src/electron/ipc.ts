@@ -8,6 +8,7 @@ import {
   deleteAgent,
   getAgent,
   getConnection,
+  listComputers,
   listAgents,
   listConversations,
   loadHistory,
@@ -29,6 +30,7 @@ import {
 import { connectProvider, disconnectProvider, listModels, listProviders } from "./libs/providers.js";
 import { getSettings, updateSettings } from "./libs/settings.js";
 import { intakeFiles } from "./libs/attachments.js";
+import { getConversationEnv, setConversationEnv, setProfileEnvDefault } from "./libs/env.js";
 import {
   CLOUD_DEFAULT_URL,
   deleteProfile,
@@ -153,6 +155,14 @@ const handlers: Handlers = {
     } catch (error) {
       return { ok: false as const, error: describeError(error) };
     }
+  },
+  listComputers: () => listComputers(),
+  getConversationEnv: (conversationId) => getConversationEnv(conversationId),
+  setConversationEnv: (conversationId, selector) =>
+    setConversationEnv(conversationId, selector),
+  setProfileEnvDefault: async (selector) => {
+    await setProfileEnvDefault(selector);
+    return profilesResult();
   },
   listAgents,
   createAgent,

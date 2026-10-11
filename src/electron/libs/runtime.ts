@@ -42,6 +42,8 @@ import {
   toChatRow,
 } from "./transcript.js";
 import { wireContent, type AttachmentView } from "./attachments.js";
+import { listComputers as listCloudComputers } from "./env.js";
+import type { ComputerSummary } from "../types.js";
 import { classifyResult, contentToText } from "@angus/letta-client-core";
 import { activeProfile, getProfileSecret, onProfileSignedOut } from "./profiles.js";
 
@@ -394,6 +396,11 @@ export async function loadHistory(conversationId: string, limit: number): Promis
   // otids it covers no longer need their in-memory staging copy.
   for (const otid of historyOtids(page.messages)) pendingAttachments.delete(otid);
   return result;
+}
+
+/** Cloud computers for the environment picker; errors propagate to the UI. */
+export async function listComputers(): Promise<ComputerSummary[]> {
+  return listCloudComputers(await ensureClient());
 }
 
 // --- Turns ------------------------------------------------------------------

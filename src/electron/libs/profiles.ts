@@ -6,6 +6,7 @@ import {
   parseOAuthCredential,
   refreshOAuthCredential,
   revokeOAuthCredential,
+  type ComputerSelectorField,
   type KeyValueStore,
   type OAuthCredential,
   type SecretStore,
@@ -35,6 +36,12 @@ export interface Profile {
   url: string;
   /** Cloud only; profiles created before OAuth support omit it and stay API-key profiles. */
   authMethod?: CloudAuthMethod;
+  /**
+   * Cloud only: the environment NEW conversations route to (their sessions
+   * pass it as the SDK `computer` option). undefined = SDK-managed sandbox.
+   * Existing conversations keep their own per-conversation choice.
+   */
+  computerSelector?: ComputerSelectorField;
   createdAt: number;
 }
 
@@ -51,7 +58,8 @@ const REFRESH_SKEW_MS = 60_000;
 let kvStore: KeyValueStore | null = null;
 let secretStore: SecretStore | null = null;
 
-function kv(): KeyValueStore {
+/** The metadata store — plain data, never secrets. Shared with the env keys. */
+export function kv(): KeyValueStore {
   kvStore ??= fileKeyValueStore(join(app.getPath("userData"), "profiles.json"));
   return kvStore;
 }
@@ -325,6 +333,7 @@ export function profileState(): {
     url: string;
     authMethod: CloudAuthMethod | null;
     hasCredential: boolean;
+    computerSelector?: ComputerSelectorField;
   }>;
   activeProfileId: string | null;
 } {
@@ -338,6 +347,7 @@ export function profileState(): {
       url: p.url,
       authMethod: p.authMethod ?? null,
       hasCredential: current.hasCredential[p.id] ?? false,
+      ...(p.computerSelector !== undefined ? { computerSelector: p.computerSelector } : {}),
     })),
     activeProfileId: current.activeId,
   };

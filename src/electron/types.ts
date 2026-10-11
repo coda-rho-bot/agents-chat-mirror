@@ -51,6 +51,42 @@ export type ProfileSummary = {
   url: string;
   authMethod: "oauth" | "api_key" | null;
   hasCredential: boolean;
+  /** Cloud only: the environment new conversations route to. */
+  computerSelector?: ComputerSelectorField;
+};
+
+/**
+ * Mirrors of the core's environment-selection types
+ * (@angus/letta-client-core env/selector.ts + env/conversationEnv.ts). The
+ * renderer project compiles without node types, so this shared boundary
+ * re-declares the shapes rather than importing the core source; the electron
+ * project's IPC handler assignability compile-checks the mirror against the
+ * real core types, so drift fails the build instead of slipping through.
+ */
+export type ComputerSelectorField =
+  | string
+  | { name: string }
+  | { deviceId: string }
+  | { id: string }
+  | { connectionId: string; name?: string }
+  /** Preferred: stable device identity + display name; the connection lease
+   *  is resolved at session-attach time (leases change on remote restarts). */
+  | { deviceId: string; connectionId: string; name?: string };
+
+export type ConversationEnv = {
+  /** null = explicit Cloud Sandbox; undefined = inherit profile default. */
+  selector: ComputerSelectorField | null | undefined;
+};
+
+/** A computer registered with the Letta Cloud account (Android's shape). */
+export type ComputerSummary = {
+  /** Stable identifier for the physical device across reconnects. */
+  deviceId: string;
+  /** Human-readable computer name. */
+  name: string;
+  /** Current online connection lease (null when offline). */
+  connectionId: string | null;
+  status: "online" | "offline";
 };
 
 /** Profile mutations: a string replaces the stored secret, omitted keeps it. */
@@ -270,6 +306,17 @@ export type AppRequests = {
   setActiveProfile(profileId: string | null): ProfilesResult;
   /** Sign in with Letta; targets an existing profile or creates a new one. */
   oauthSignIn(profileId?: string): OAuthSignInResult;
+  /** Cloud only; throws on other backends (the chip renders cloud-only). */
+  listComputers(): ComputerSummary[];
+  /** The environment choice for one conversation. */
+  getConversationEnv(conversationId: string): ConversationEnv;
+  /** Persist an explicit choice: null = Cloud Sandbox, selector = a computer. */
+  setConversationEnv(
+    conversationId: string,
+    selector: ComputerSelectorField | null,
+  ): ConversationEnv;
+  /** Set/clear the account default for new conversations. */
+  setProfileEnvDefault(selector: ComputerSelectorField | null): ProfilesResult;
   removeQueuedMessage(conversationId: string, itemId: string): void;
   listAgents(): AgentSummary[];
   createAgent(input: { name: string; model?: string }): AgentSummary;
