@@ -31,6 +31,11 @@ const METHODS = [
   "selectDirectory",
   "oauthSignIn",
   "removeQueuedMessage",
+  "listProfiles",
+  "saveProfile",
+  "deleteProfile",
+  "signOutProfile",
+  "setActiveProfile",
 ] as const satisfies readonly (keyof AppRequests)[];
 
 // Fails to compile if a request is added to AppRequests but not listed above.

@@ -315,3 +315,30 @@ export function profileHasSecret(id: string): boolean {
 export function snapshotProfiles(): Profile[] {
   return snapshot?.profiles ?? [];
 }
+
+/** Renderer-safe summaries (metadata + credential presence, never secrets). */
+export function profileState(): {
+  profiles: Array<{
+    id: string;
+    name: string;
+    type: ProfileType;
+    url: string;
+    authMethod: CloudAuthMethod | null;
+    hasCredential: boolean;
+  }>;
+  activeProfileId: string | null;
+} {
+  const current = snapshot;
+  if (!current) return { profiles: [], activeProfileId: null };
+  return {
+    profiles: current.profiles.map((p) => ({
+      id: p.id,
+      name: p.name,
+      type: p.type,
+      url: p.url,
+      authMethod: p.authMethod ?? null,
+      hasCredential: current.hasCredential[p.id] ?? false,
+    })),
+    activeProfileId: current.activeId,
+  };
+}

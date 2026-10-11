@@ -1,5 +1,5 @@
 import { BrowserWindow, dialog, ipcMain } from "electron";
-import type { AppEvent, AppRequests } from "./types.js";
+import type { AppEvent, AppRequests, ProfilesResult } from "./types.js";
 import {
   applyPermissionMode,
   archiveConversation,
@@ -28,7 +28,20 @@ import {
 } from "./libs/memory.js";
 import { connectProvider, disconnectProvider, listModels, listProviders } from "./libs/providers.js";
 import { getSettings, updateSettings } from "./libs/settings.js";
-import { persistOAuthCredential, signInWithLetta } from "./libs/oauth.js";
+import {
+  CLOUD_DEFAULT_URL,
+  deleteProfile,
+  listProfiles,
+  newProfileId,
+  profileState,
+  refreshProfiles,
+  saveOAuthProfile,
+  saveProfile,
+  setActiveProfileId,
+  signOutProfile,
+  type Profile,
+} from "./libs/profiles.js";
+import { signInWithLetta } from "./libs/oauth.js";
 import { describeError } from "./libs/transcript.js";
 import { validateEventFrame } from "./util.js";
 
@@ -44,6 +57,21 @@ export function broadcast(event: AppEvent): void {
   }
 }
 
+/** One round trip: fresh snapshot + settings, so the UI never mixes states. */
+async function profilesResult(): Promise<ProfilesResult> {
+  await refreshProfiles();
+  return { settings: getSettings(), ...profileState() };
+}
+
+/** "Letta Cloud", then "Letta Cloud 2", 3, ... for repeat sign-ins. */
+async function nextCloudName(): Promise<string> {
+  const names = new Set((await listProfiles()).map((profile) => profile.name));
+  if (!names.has("Letta Cloud")) return "Letta Cloud";
+  for (let count = 2; ; count++) {
+    if (!names.has(`Letta Cloud ${count}`)) return `Letta Cloud ${count}`;
+  }
+}
+
 const handlers: Handlers = {
   getSettings,
   updateSettings: (update) => {
@@ -55,16 +83,74 @@ const handlers: Handlers = {
   },
   getConnection,
   reconnect,
-  oauthSignIn: async () => {
+  listProfiles: () => profilesResult(),
+  saveProfile: async (input) => {
+    const type = input.type === "remote" ? "remote" : "cloud";
+    const url = input.url.trim() || (type === "cloud" ? CLOUD_DEFAULT_URL : "");
+    if (type === "remote" && !url) throw new Error("A server URL is required.");
+    const existing = input.id
+      ? (await listProfiles()).find((profile) => profile.id === input.id)
+      : undefined;
+    const profile: Profile = {
+      id: existing?.id ?? newProfileId(),
+      type,
+      name: input.name.trim() || (type === "cloud" ? "Letta Cloud" : "Remote server"),
+      url,
+      // Editing keeps the auth method; new cloud profiles are API-key ones
+      // (OAuth profiles are created by signing in).
+      authMethod: type === "cloud" ? (existing?.authMethod ?? "api_key") : undefined,
+      createdAt: existing?.createdAt ?? Date.now(),
+    };
+    await saveProfile(profile, input.secret?.trim() ? input.secret.trim() : null);
+    const result = await profilesResult();
+    // Editing the active profile may have changed the connection.
+    if (result.activeProfileId === profile.id) void reconnect();
+    return result;
+  },
+  deleteProfile: async (profileId) => {
+    const wasActive = profileState().activeProfileId === profileId;
+    await deleteProfile(profileId);
+    const result = await profilesResult();
+    if (wasActive) void reconnect();
+    return result;
+  },
+  signOutProfile: async (profileId) => {
+    await signOutProfile(profileId);
+    const result = await profilesResult();
+    if (result.activeProfileId === profileId) void reconnect();
+    return result;
+  },
+  setActiveProfile: async (profileId) => {
+    await setActiveProfileId(profileId);
+    const result = await profilesResult();
+    void reconnect();
+    return result;
+  },
+  oauthSignIn: async (profileId) => {
     try {
       const credential = await signInWithLetta();
-      // Persist the FULL credential (access + refresh + expiry) so the
-      // refresh hook (follow-up) has something to refresh with. The app's
-      // cloud connection still takes the access token as its API key.
-      persistOAuthCredential(credential);
-      return { ok: true as const, apiKey: credential.accessToken };
+      const existing = profileId
+        ? (await listProfiles()).find((profile) => profile.id === profileId)
+        : undefined;
+      const profile: Profile = existing
+        ? { ...existing, type: "cloud", authMethod: "oauth" }
+        : {
+            id: newProfileId(),
+            type: "cloud",
+            name: await nextCloudName(),
+            url: CLOUD_DEFAULT_URL,
+            authMethod: "oauth",
+            createdAt: Date.now(),
+          };
+      await saveOAuthProfile(profile, credential);
+      await setActiveProfileId(profile.id);
+      const result = await profilesResult();
+      void reconnect();
+      const summary = result.profiles.find((item) => item.id === profile.id);
+      if (!summary) throw new Error("Sign-in completed but the profile is missing.");
+      return { ok: true as const, profile: summary, ...result };
     } catch (error) {
-      return { ok: false as const, error: error instanceof Error ? error.message : String(error) };
+      return { ok: false as const, error: describeError(error) };
     }
   },
   listAgents,

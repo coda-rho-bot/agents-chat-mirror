@@ -42,6 +42,38 @@ export type SettingsUpdate = {
   agentId?: string | null;
 };
 
+/** A connection profile, as the renderer sees it — no secrets, only presence. */
+export type ProfileSummary = {
+  id: string;
+  name: string;
+  type: "cloud" | "remote";
+  /** Cloud: API base URL. Remote: WebSocket URL. */
+  url: string;
+  authMethod: "oauth" | "api_key" | null;
+  hasCredential: boolean;
+};
+
+/** Profile mutations: a string replaces the stored secret, omitted keeps it. */
+export type ProfileSave = {
+  /** Omitted (or unknown) creates a new profile. */
+  id?: string;
+  type: "cloud" | "remote";
+  name: string;
+  url: string;
+  secret?: string;
+};
+
+/** Everything a profile mutation returns, so the UI updates in one round trip. */
+export type ProfilesResult = {
+  settings: AppSettings;
+  profiles: ProfileSummary[];
+  activeProfileId: string | null;
+};
+
+export type OAuthSignInResult =
+  | ({ ok: true; profile: ProfileSummary } & ProfilesResult)
+  | { ok: false; error: string };
+
 export type ConnectionState =
   | { status: "connecting"; backend: BackendKind }
   | {
@@ -216,7 +248,14 @@ export type AppRequests = {
   updateSettings(update: SettingsUpdate): AppSettings;
   getConnection(): ConnectionState;
   reconnect(): ConnectionState;
-  oauthSignIn(): { ok: true; apiKey: string } | { ok: false; error: string };
+  listProfiles(): ProfilesResult;
+  saveProfile(input: ProfileSave): ProfilesResult;
+  deleteProfile(profileId: string): ProfilesResult;
+  signOutProfile(profileId: string): ProfilesResult;
+  /** null switches to the built-in local connection. */
+  setActiveProfile(profileId: string | null): ProfilesResult;
+  /** Sign in with Letta; targets an existing profile or creates a new one. */
+  oauthSignIn(profileId?: string): OAuthSignInResult;
   removeQueuedMessage(conversationId: string, itemId: string): void;
   listAgents(): AgentSummary[];
   createAgent(input: { name: string; model?: string }): AgentSummary;

@@ -5,6 +5,8 @@ import type {
   AppSettings,
   ChatRow,
   ConversationSummary,
+  ProfileSummary,
+  ProfilesResult,
 } from "../../src/ui/types";
 
 type Store = typeof import("../../src/ui/store");
@@ -27,6 +29,28 @@ const agents: AgentSummary[] = [
   { id: "agent-2", name: "Two", description: null, model: "provider/two" },
 ];
 
+const profile = (id: string, extra: Partial<ProfileSummary> = {}): ProfileSummary => ({
+  id,
+  name: `Profile ${id}`,
+  type: "cloud",
+  url: "https://api.letta.com",
+  authMethod: "oauth",
+  hasCredential: true,
+  ...extra,
+});
+
+const profilesResult = (extra: Partial<ProfilesResult> = {}): ProfilesResult => {
+  const merged: ProfilesResult = {
+    settings,
+    profiles: [profile("p-1")],
+    activeProfileId: "p-1",
+    ...extra,
+  };
+  // The settings snapshot and the active id must agree.
+  if (!extra.settings) merged.settings = { ...settings, activeProfileId: merged.activeProfileId };
+  return merged;
+};
+
 const conversation = (id: string, extra: Partial<ConversationSummary> = {}): ConversationSummary => ({
   id,
   agentId: "agent-2",
@@ -46,7 +70,7 @@ function createBridge() {
     onEvent: vi.fn(() => () => undefined),
     getSettings: vi.fn(async () => settings),
     updateSettings: vi.fn(async () => settings),
-    getConnection: vi.fn(),
+    getConnection: vi.fn(async () => ({ status: "connecting", backend: "local" })),
     reconnect: vi.fn(),
     listAgents: vi.fn(async () => agents),
     createAgent: vi.fn(),
@@ -73,6 +97,11 @@ function createBridge() {
     selectDirectory: vi.fn(),
     oauthSignIn: vi.fn(),
     removeQueuedMessage: vi.fn(),
+    listProfiles: vi.fn(async () => profilesResult()),
+    saveProfile: vi.fn(async () => profilesResult()),
+    deleteProfile: vi.fn(async () => profilesResult({ profiles: [], activeProfileId: null })),
+    signOutProfile: vi.fn(async () => profilesResult()),
+    setActiveProfile: vi.fn(async () => profilesResult()),
   } satisfies Record<keyof AppBridge, unknown>;
 }
 
@@ -334,5 +363,58 @@ describe("agents", () => {
     await state().updateAgent({ name: "Renamed" });
     expect(bridge.updateAgent).toHaveBeenCalledWith("agent-2", { name: "Renamed" });
     expect(state().agents.find((agent) => agent.id === "agent-2")?.name).toBe("Renamed");
+  });
+});
+
+describe("profiles", () => {
+  it("loads profiles during bootstrap", async () => {
+    bridge.listProfiles.mockResolvedValue(profilesResult());
+    await state().bootstrap();
+    expect(state().profiles).toEqual([profile("p-1")]);
+    expect(state().profilesLoaded).toBe(true);
+    expect(state().settings?.activeProfileId).toBe("p-1");
+  });
+
+  it("switching profiles updates state and asks the main process to reconnect", async () => {
+    const next = profilesResult({
+      settings: { ...settings, activeProfileId: "p-2" },
+      profiles: [profile("p-1"), profile("p-2")],
+      activeProfileId: "p-2",
+    });
+    bridge.setActiveProfile.mockResolvedValue(next);
+
+    await state().switchProfile("p-2");
+
+    expect(bridge.setActiveProfile).toHaveBeenCalledWith("p-2");
+    expect(state().settings?.activeProfileId).toBe("p-2");
+    expect(state().profiles).toHaveLength(2);
+  });
+
+  it("sign-in success stores the profile and list", async () => {
+    bridge.oauthSignIn.mockResolvedValue({ ok: true, profile: profile("p-9"), ...profilesResult({ profiles: [profile("p-9")] }) });
+    const created = await state().oauthSignIn();
+    expect(created.id).toBe("p-9");
+    expect(state().profiles).toEqual([profile("p-9")]);
+  });
+
+  it("sign-in failures surface the error", async () => {
+    bridge.oauthSignIn.mockResolvedValue({ ok: false, error: "browser said no" });
+    await expect(state().oauthSignIn()).rejects.toThrow("browser said no");
+  });
+
+  it("profile.signed-out shows a notice and reloads the profiles", async () => {
+    useAppStore.setState({ profiles: [profile("p-1")] });
+    state().handleEvent({ type: "profile.signed-out", profileId: "p-1" });
+    await flush();
+    expect(state().notice).toMatch(/signed out of profile p-1/i);
+    expect(bridge.listProfiles).toHaveBeenCalled();
+  });
+
+  it("deleting a profile updates the list", async () => {
+    bridge.deleteProfile.mockResolvedValue(profilesResult({ profiles: [], activeProfileId: null }));
+    await state().deleteProfile("p-1");
+    expect(bridge.deleteProfile).toHaveBeenCalledWith("p-1");
+    expect(state().profiles).toEqual([]);
+    expect(state().settings?.activeProfileId).toBeNull();
   });
 });

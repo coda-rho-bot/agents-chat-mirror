@@ -41,6 +41,7 @@ beforeEach(async () => {
     listMemory: vi.fn(async () => ({ enabled: true, files: [] })),
     listConversations: vi.fn().mockResolvedValue([]),
     sendMessage: vi.fn(async () => conversation("conv-1")),
+    listProfiles: vi.fn(async () => ({ settings, profiles: [], activeProfileId: null })),
   } as unknown as AppBridge;
   vi.stubGlobal("window", { bridge });
   vi.stubGlobal("crypto", { randomUUID: () => "otid-1" });

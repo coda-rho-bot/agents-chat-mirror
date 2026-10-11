@@ -4,12 +4,11 @@
  * The browser part (expo-auth-session on Android) becomes an OS-default
  * browser via shell.openExternal here; the redirect captures on a loopback
  * listener, per RFC 8252. The token exchange/refresh/revoke logic is
- * @angus/letta-client-core's — one implementation, two shells.
+ * @angus/letta-client-core's — one implementation, two shells. The signed-in
+ * credential is persisted by the profiles module's SecretStore, not here.
  */
-import { app, safeStorage, shell } from "electron";
+import { shell } from "electron";
 import { createServer, type Server } from "node:http";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
 import { randomBytes, createHash } from "node:crypto";
 import {
   exchangeAuthorizationCode,
@@ -85,53 +84,4 @@ export async function signInWithLetta(): Promise<OAuthCredential> {
   });
 
   return exchangeAuthorizationCode({ clientId, code, codeVerifier: verifier, redirectUri: REDIRECT_URI });
-}
-
-/**
- * Electron-side SecretStore for the OAuth credential: safeStorage-encrypted
- * bytes at a fixed path in userData. Implements the core's SecretStore
- * contract (get/set/delete) so refresh logic stays core-side where possible.
- */
-export function oauthCredentialPath(): string {
-  return join(app.getPath("userData"), "oauth-credential.bin");
-}
-
-function readCredentialStore(): { get(k: string): string | null; set(k: string, v: string): void; delete(k: string): void } {
-  const path = oauthCredentialPath();
-  const load = (): Record<string, string> => {
-    try {
-      const raw = readFileSync(path);
-      const plain = safeStorage.decryptString(raw);
-      return plain ? (JSON.parse(plain) as Record<string, string>) : {};
-    } catch {
-      return {};
-    }
-  };
-  const write = (data: Record<string, string>): void => {
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, safeStorage.encryptString(JSON.stringify(data)));
-  };
-  return {
-    get(k) { return load()[k] ?? null; },
-    set(k, v) { const d = load(); d[k] = v; write(d); },
-    delete(k) { const d = load(); if (k in d) { delete d[k]; write(d); } },
-  };
-}
-
-/** Persist the full credential (access + refresh + expiry) at sign-in. */
-export function persistOAuthCredential(credential: OAuthCredential): void {
-  readCredentialStore().set("credential", JSON.stringify(credential));
-}
-
-/** Read the persisted credential, if any. */
-export function loadOAuthCredential(): OAuthCredential | null {
-  const raw = readCredentialStore().get("credential");
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw) as Partial<OAuthCredential>;
-    if (parsed.kind === "oauth" && parsed.accessToken && parsed.refreshToken && parsed.expiresAt) {
-      return parsed as OAuthCredential;
-    }
-  } catch { /* corrupt store = no credential */ }
-  return null;
 }

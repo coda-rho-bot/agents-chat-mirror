@@ -13,6 +13,9 @@ import type {
   ConversationSummary,
   MemoryFile,
   ModelOption,
+  ProfileSave,
+  ProfileSummary,
+  ProfilesResult,
   ProviderSummary,
   SettingsUpdate,
 } from "./types";
@@ -62,6 +65,9 @@ const EMPTY_CHAT: ChatState = {
 type AppState = {
   settings: AppSettings | null;
   connection: ConnectionState | null;
+  /** Connection profiles; the built-in local connection is not in this list. */
+  profiles: ProfileSummary[];
+  profilesLoaded: boolean;
   agents: AgentSummary[];
   agentsLoaded: boolean;
   agentId: string | null;
@@ -91,6 +97,15 @@ type AppState = {
 
   bootstrap: () => Promise<void>;
   handleEvent: (event: AppEvent) => void;
+  /** Internal: apply a profiles round trip to the store. */
+  applyProfiles: (result: ProfilesResult) => void;
+  loadProfiles: () => Promise<void>;
+  switchProfile: (profileId: string | null) => Promise<void>;
+  saveProfile: (input: ProfileSave) => Promise<void>;
+  deleteProfile: (profileId: string) => Promise<void>;
+  signOutProfile: (profileId: string) => Promise<void>;
+  /** Sign in with Letta; targets an existing profile or creates a new one. */
+  oauthSignIn: (profileId?: string) => Promise<ProfileSummary>;
   refreshAgents: () => Promise<void>;
   selectAgent: (agentId: string) => Promise<void>;
   createAgent: (input: { name: string; model?: string }) => Promise<void>;
@@ -168,6 +183,8 @@ const CLEARED = {
 export const useAppStore = create<AppState>((set, get) => ({
   settings: null,
   connection: null,
+  profiles: [],
+  profilesLoaded: false,
   ...CLEARED,
   drafts: {},
   cwdOverrides: {},
@@ -179,8 +196,17 @@ export const useAppStore = create<AppState>((set, get) => ({
   agentSettingsOpen: false,
 
   bootstrap: async () => {
-    const [settings, connection] = await Promise.all([api.getSettings(), api.getConnection()]);
-    set({ settings });
+    // listProfiles returns settings + profiles in one snapshot, so the two
+    // can never disagree about which profile is active.
+    const [profileState, connection] = await Promise.all([
+      api.listProfiles(),
+      api.getConnection(),
+    ]);
+    set({
+      settings: profileState.settings,
+      profiles: profileState.profiles,
+      profilesLoaded: true,
+    });
     get().handleEvent({ type: "connection", state: connection });
   },
 
@@ -271,7 +297,48 @@ export const useAppStore = create<AppState>((set, get) => ({
         if (event.command === "new-chat") get().openChat(null);
         else get().openSettings("connection");
         break;
+      case "profile.signed-out": {
+        const profile = get().profiles.find((item) => item.id === event.profileId);
+        set({
+          notice: `Signed out of ${profile?.name ?? "Letta Cloud"} — sign in again to reconnect.`,
+        });
+        void get().loadProfiles();
+        break;
+      }
     }
+  },
+
+  applyProfiles: (result: ProfilesResult) => {
+    set({ settings: result.settings, profiles: result.profiles, profilesLoaded: true });
+  },
+
+  loadProfiles: async () => {
+    get().applyProfiles(await api.listProfiles());
+  },
+
+  // The main process reconnects on these; the renderer follows through
+  // `connection` events (agents/conversations clear and reload on ready).
+  switchProfile: async (profileId) => {
+    get().applyProfiles(await api.setActiveProfile(profileId));
+  },
+
+  saveProfile: async (input) => {
+    get().applyProfiles(await api.saveProfile(input));
+  },
+
+  deleteProfile: async (profileId) => {
+    get().applyProfiles(await api.deleteProfile(profileId));
+  },
+
+  signOutProfile: async (profileId) => {
+    get().applyProfiles(await api.signOutProfile(profileId));
+  },
+
+  oauthSignIn: async (profileId) => {
+    const result = await api.oauthSignIn(profileId);
+    if (!result.ok) throw new Error(result.error);
+    get().applyProfiles(result);
+    return result.profile;
   },
 
   refreshAgents: async () => {
