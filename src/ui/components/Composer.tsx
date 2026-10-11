@@ -1,12 +1,24 @@
-import { useEffect, useLayoutEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { folderName, shortPath } from "../lib/format";
 import { NEW_CHAT, selectCwd, selectModel, useAppStore } from "../store";
-import type { PermissionMode } from "../types";
+import type { AttachmentView, PermissionMode } from "../types";
 import { ModelPicker } from "./ModelPicker";
-import { ArrowUpIcon, CheckIcon, ChevronDownIcon, FolderIcon, ShieldIcon, StopIcon } from "./icons";
+import {
+  ArrowUpIcon,
+  CheckIcon,
+  ChevronDownIcon,
+  CloseIcon,
+  FolderIcon,
+  PaperclipIcon,
+  ShieldIcon,
+  StopIcon,
+} from "./icons";
 
 const MAX_HEIGHT = 240;
+// Mirror of MAX_ATTACHMENTS in src/electron/libs/attachments.ts — intake
+// enforces the real cap; this keeps a second pick from over-staging.
+const MAX_STAGED = 4;
 // A stable reference: a selector must not return a fresh array on every call.
 const NO_FOLDERS: string[] = [];
 
@@ -111,7 +123,10 @@ export function Composer({ disabled }: { disabled: boolean }) {
   const setModel = useAppStore((state) => state.setModel);
   const send = useAppStore((state) => state.send);
   const stop = useAppStore((state) => state.stop);
+  const pickImages = useAppStore((state) => state.pickImages);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  // Staging is composer-local and cleared on conversation switch.
+  const [staged, setStaged] = useState<AttachmentView[]>([]);
 
   useLayoutEffect(() => {
     const input = inputRef.current;
@@ -125,14 +140,50 @@ export function Composer({ disabled }: { disabled: boolean }) {
     if (!disabled) inputRef.current?.focus();
   }, [key, disabled]);
 
+  const addPicked = async () => {
+    const { attachments } = await pickImages();
+    setStaged((current) => [...current, ...attachments].slice(0, MAX_STAGED));
+  };
+
   // Mid-run sends are queued server-side (delivered when the turn ends) —
   // the composer stays usable while a turn runs; the stop button remains
   // available for aborting the active run.
-  const canSend = !disabled && draft.trim().length > 0;
+  const canSend = !disabled && (draft.trim().length > 0 || staged.length > 0);
+
+  const sendNow = async () => {
+    if (!canSend) return;
+    // On failure the store puts the text back in the composer; the images
+    // stay staged the same way, so nothing silently disappears.
+    if (await send(draft, staged)) setStaged([]);
+  };
 
   return (
     <div className="mx-auto w-full max-w-3xl px-6 pb-5">
       <div className="rounded-2xl border border-border bg-surface shadow-card transition-colors focus-within:border-border-hover">
+        {staged.length > 0 && (
+          <div className="flex flex-wrap gap-2 px-4 pt-3">
+            {staged.map((attachment) => (
+              <div key={attachment.id} className="group relative">
+                <img
+                  src={`data:${attachment.mediaType};base64,${attachment.data}`}
+                  alt={attachment.name}
+                  title={attachment.name}
+                  className="h-16 w-16 rounded-lg border border-border object-cover"
+                />
+                <button
+                  type="button"
+                  aria-label={`Remove ${attachment.name}`}
+                  onClick={() =>
+                    setStaged((current) => current.filter((item) => item.id !== attachment.id))
+                  }
+                  className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-ink-900 text-surface opacity-0 transition-opacity hover:opacity-100 group-hover:opacity-100"
+                >
+                  <CloseIcon className="h-3 w-3" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         <textarea
           ref={inputRef}
           rows={1}
@@ -144,7 +195,7 @@ export function Composer({ disabled }: { disabled: boolean }) {
             // Enter sends; Shift+Enter and IME composition insert a newline.
             if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
             event.preventDefault();
-            if (canSend) void send(draft);
+            if (canSend) void sendNow();
           }}
           className="block w-full resize-none bg-transparent px-4 pt-3.5 text-[15px] leading-relaxed text-ink-900 placeholder:text-muted focus:outline-none disabled:cursor-not-allowed"
         />
@@ -153,6 +204,16 @@ export function Composer({ disabled }: { disabled: boolean }) {
             <FolderMenu cwd={cwd} />
             <ModelPicker value={model} models={models} onChange={setModel} className="min-w-0" />
             <PermissionMenu />
+            <button
+              type="button"
+              onClick={() => void addPicked()}
+              disabled={disabled}
+              aria-label="Attach images"
+              title="Attach images"
+              className="chip"
+            >
+              <PaperclipIcon className="h-3.5 w-3.5 shrink-0" />
+            </button>
           </div>
           {running && activeId ? (
             <button
@@ -167,7 +228,7 @@ export function Composer({ disabled }: { disabled: boolean }) {
           ) : (
             <button
               type="button"
-              onClick={() => void send(draft)}
+              onClick={() => void sendNow()}
               disabled={!canSend}
               aria-label="Send"
               title="Send (Enter)"

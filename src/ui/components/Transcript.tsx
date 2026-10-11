@@ -7,6 +7,19 @@ import { CheckIcon, ChevronRightIcon, CloseIcon, Spinner } from "./icons";
 const UserMessage = ({ row }: { row: ChatTextRow }) => (
   <div className="flex justify-end">
     <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl bg-surface-tertiary px-4 py-2.5 text-ink-900">
+      {row.images && row.images.length > 0 && (
+        <div className="mb-1.5 flex flex-wrap justify-end gap-1.5">
+          {row.images.map((image) => (
+            <img
+              key={image.id}
+              src={`data:${image.mediaType};base64,${image.data}`}
+              alt={image.name}
+              title={image.name}
+              className="h-28 w-28 rounded-lg object-cover"
+            />
+          ))}
+        </div>
+      )}
       {row.text}
     </div>
   </div>

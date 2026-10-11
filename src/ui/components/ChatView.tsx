@@ -291,7 +291,9 @@ export function ChatView() {
           onDecide={(decision) => respondApproval(approval.requestId, decision)}
         />
       )}
-      <Composer disabled={!ready} />
+      {/* Keyed by conversation: switching remounts the composer, which is
+          what clears its local attachment staging (React's reset-with-key). */}
+      <Composer key={activeId ?? NEW_CHAT} disabled={!ready} />
     </main>
   );
 }

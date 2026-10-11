@@ -3,6 +3,7 @@ import type {
   AgentSummary,
   AppBridge,
   AppSettings,
+  AttachmentView,
   ChatRow,
   ConversationSummary,
   ProfileSummary,
@@ -95,7 +96,12 @@ function createBridge() {
     stopTurn: vi.fn(),
     respondApproval: vi.fn(),
     selectDirectory: vi.fn(),
-    selectImages: vi.fn(async () => ({ attachments: [], skipped: [] })),
+    selectImages: vi.fn(
+      async (): Promise<{ attachments: AttachmentView[]; skipped: string[] }> => ({
+        attachments: [],
+        skipped: [],
+      }),
+    ),
     oauthSignIn: vi.fn(),
     removeQueuedMessage: vi.fn(),
     listProfiles: vi.fn(async () => profilesResult()),
@@ -457,5 +463,22 @@ describe("sending with attachments", () => {
     useAppStore.setState({ agentId: "agent-1", activeId: "conv-1" });
     await state().send("");
     expect(bridge.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("reports a failed send so the composer keeps its staged images", async () => {
+    useAppStore.setState({ agentId: "agent-1", activeId: "conv-1" });
+    bridge.sendMessage.mockRejectedValue(new Error("offline"));
+    await expect(state().send("look", [attachment])).resolves.toBe(false);
+  });
+});
+
+describe("pickImages", () => {
+  it("surfaces skipped files as a notice", async () => {
+    bridge.selectImages.mockResolvedValue({
+      attachments: [],
+      skipped: ["huge.png — over the 25MB limit"],
+    });
+    await state().pickImages();
+    expect(state().notice).toBe("huge.png — over the 25MB limit");
   });
 });

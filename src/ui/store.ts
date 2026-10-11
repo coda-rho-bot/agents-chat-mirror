@@ -114,7 +114,8 @@ type AppState = {
   deleteAgent: () => Promise<void>;
   openChat: (conversationId: string | null) => void;
   loadHistory: (conversationId: string, limit?: number) => Promise<void>;
-  send: (text: string, attachments?: AttachmentView[]) => Promise<void>;
+  /** True when the message actually went out; false when gated or failed. */
+  send: (text: string, attachments?: AttachmentView[]) => Promise<boolean>;
   stop: () => void;
   respondApproval: (requestId: string, decision: ApprovalDecision) => void;
   removeQueued: (conversationId: string, itemId: string) => void;
@@ -135,6 +136,7 @@ type AppState = {
   openSettings: (tab: SettingsTab) => void;
   reconnect: () => void;
   pickCwd: () => Promise<void>;
+  pickImages: () => Promise<{ attachments: AttachmentView[]; skipped: string[] }>;
   setCwd: (cwd: string) => void;
   setModel: (handle: string) => void;
   setDraft: (text: string) => void;
@@ -459,12 +461,13 @@ export const useAppStore = create<AppState>((set, get) => ({
     const text = rawText.trim();
     const state = get();
     const { agentId, activeId } = state;
-    if ((!text && attachments.length === 0) || !agentId) return;
+    if ((!text && attachments.length === 0) || !agentId) return false;
+    let sent = false;
     const key = activeId ?? NEW_CHAT;
     // Mid-run sends queue server-side for EXISTING conversations — do not
     // gate on running there (PR #8; matches the runtime change). The
     // first-message path still needs its single-flight guard.
-    if (activeId ? false : state.pendingFirstMessage) return;
+    if (activeId ? false : state.pendingFirstMessage) return false;
 
     const otid = crypto.randomUUID();
     const userRow = optimisticUserRow(text, otid, attachments);
@@ -528,6 +531,7 @@ export const useAppStore = create<AppState>((set, get) => ({
                   : current.activeId,
             }),
       }));
+      sent = true;
     } catch (error) {
       // Nothing was sent: put the message back in the composer.
       set((current) => ({
@@ -542,6 +546,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           : { pendingFirstMessage: null }),
       }));
     }
+    return sent;
   },
 
   stop: () => {
@@ -673,6 +678,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   pickCwd: async () => {
     const directory = await api.selectDirectory();
     if (directory) get().setCwd(directory);
+  },
+  pickImages: async () => {
+    const picked = await api.selectImages();
+    if (picked.skipped.length > 0) get().setNotice(picked.skipped.join("\n"));
+    return picked;
   },
 
   setCwd: (cwd) =>
