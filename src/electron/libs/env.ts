@@ -4,7 +4,7 @@ import {
   type ComputerSelectorField,
   type ConversationEnv,
 } from "@angus/letta-client-core";
-import type { Computer, LettaAgentClient } from "@letta-ai/letta-agent-sdk";
+import type { Computer, ComputerSelector, LettaAgentClient } from "@letta-ai/letta-agent-sdk";
 import { activeProfile, kv, saveProfile } from "./profiles.js";
 import type { ComputerSummary } from "../types.js";
 
@@ -72,4 +72,20 @@ export async function setProfileEnvDefault(
   const profile = activeProfile();
   if (!profile) return;
   await saveProfile({ ...profile, computerSelector: selector ?? undefined }, null);
+}
+
+/**
+ * The `computer` option a new session carries: the conversation's explicit
+ * choice first (null = Cloud Sandbox), then the account default; no choice
+ * at all means the SDK provisions its managed sandbox. The SDK resolves a
+ * deviceId selector to the device's CURRENT connection lease at attach time
+ * and fails loudly when the device is offline (resolveExplicitConnection is
+ * the only branch — a set selector can never fall back to a sandbox).
+ */
+export function sessionComputerOption(
+  conv: ConversationEnv,
+  profileDefault?: ComputerSelectorField,
+): ComputerSelector | undefined {
+  const effective = conv.selector === undefined ? profileDefault : conv.selector;
+  return effective === null || effective === undefined ? undefined : effective;
 }

@@ -42,7 +42,11 @@ import {
   toChatRow,
 } from "./transcript.js";
 import { wireContent, type AttachmentView } from "./attachments.js";
-import { listComputers as listCloudComputers } from "./env.js";
+import {
+  getConversationEnv,
+  listComputers as listCloudComputers,
+  sessionComputerOption,
+} from "./env.js";
 import type { ComputerSummary } from "../types.js";
 import { classifyResult, contentToText } from "@angus/letta-client-core";
 import { activeProfile, getProfileSecret, onProfileSignedOut } from "./profiles.js";
@@ -604,6 +608,15 @@ export async function sendMessage(input: SendMessageInput): Promise<Conversation
   };
   conversations.set(conversation.id, conversation);
 
+  // The environment this turn runs in: the conversation's explicit choice,
+  // else the account default, else the SDK's managed sandbox. Per-turn
+  // sessions, so a pick made mid-run applies to the NEXT send — the running
+  // turn keeps its already-attached environment.
+  const computer = sessionComputerOption(
+    await getConversationEnv(conversation.id),
+    activeProfile()?.computerSelector,
+  );
+
   const turn: Turn = {
     conversationId: conversation.id,
     accumulator: createTranscriptAccumulator(),
@@ -618,6 +631,7 @@ export async function sendMessage(input: SendMessageInput): Promise<Conversation
       cwd: input.cwd,
       permissionMode: getPermissionMode(),
       ...(input.model ? { model: input.model } : {}),
+      ...(computer ? { computer } : {}),
       canUseTool: (toolName, toolInput, context) =>
         new Promise<CanUseToolResponse>((resolve) => {
           const request: ApprovalRequest = {

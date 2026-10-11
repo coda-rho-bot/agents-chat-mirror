@@ -133,3 +133,23 @@ describe("setProfileEnvDefault", () => {
     expect(savedProfile?.computerSelector).toBeUndefined();
   });
 });
+
+describe("sessionComputerOption", () => {
+  const selector = { deviceId: "dev-1", connectionId: "conn-1", name: "MacBook" };
+
+  it("inherits to the profile default when one is set", () => {
+    expect(env.sessionComputerOption({ selector: undefined }, selector)).toBe(selector);
+  });
+
+  it("inherits to the managed sandbox when no default is set", () => {
+    expect(env.sessionComputerOption({ selector: undefined })).toBeUndefined();
+  });
+
+  it("passes a pinned computer through", () => {
+    expect(env.sessionComputerOption({ selector }, selector)).toBe(selector);
+  });
+
+  it("an explicit Cloud Sandbox overrides the profile default", () => {
+    expect(env.sessionComputerOption({ selector: null }, selector)).toBeUndefined();
+  });
+});
