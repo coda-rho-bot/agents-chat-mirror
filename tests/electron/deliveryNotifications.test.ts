@@ -86,6 +86,12 @@ describe("startDeliveryNotifications", () => {
 
   it("approvals and problems notify; completions are silent", async () => {
     const recording = makeDeps();
+    // A persisted cursor = live session (post-baseline); first-connect
+    // baselines instead of notifying (its own test below).
+    (recording.deps.kv as unknown as { map: Map<string, string> }).map.set(
+      "letta.delivery.eventCursor",
+      "0",
+    );
     recording.poll.mockResolvedValue({
       events: [
         event(1, "approval", { summary: "Approve rm -rf?" }),
@@ -102,6 +108,10 @@ describe("startDeliveryNotifications", () => {
 
   it("notification clicks route to the conversation, or home for agent-scoped events", async () => {
     const recording = makeDeps();
+    (recording.deps.kv as unknown as { map: Map<string, string> }).map.set(
+      "letta.delivery.eventCursor",
+      "0",
+    );
     recording.poll.mockResolvedValue({
       events: [event(1, "approval"), event(2, "problem")],
       latest: 2,
@@ -168,6 +178,54 @@ describe("startDeliveryNotifications", () => {
         "letta.delivery.eventCursor",
       ),
     ).toBe("1");
+    poller?.stop();
+  });
+
+  it("first connect baselines instead of bursting — backlog reaches the renderer but never notifies (P5)", async () => {
+    const recording = makeDeps();
+    recording.poll
+      .mockResolvedValueOnce({
+        events: [event(1, "approval"), event(2, "problem"), event(3, "outcome")],
+        latest: 3,
+      })
+      .mockResolvedValue({ events: [], latest: 3 });
+    const poller = await startDeliveryNotifications(recording.deps);
+    expect(recording.notifications).toEqual([]); // no burst
+    expect(recording.broadcasts).toHaveLength(1); // renderer still refreshes
+    expect(
+      (recording.deps.kv as unknown as { map: Map<string, string> }).map.get(
+        "letta.delivery.eventCursor",
+      ),
+    ).toBe("3"); // cursor baselines to latest
+    poller?.stop();
+  });
+
+  it("after the baseline, a NEW event notifies normally — the suppression is exactly one poll", async () => {
+    const recording = makeDeps();
+    recording.poll
+      .mockResolvedValueOnce({ events: [event(1, "approval")], latest: 1 })
+      .mockResolvedValueOnce({ events: [event(2, "approval", { summary: "Bash" })], latest: 2 })
+      .mockResolvedValue({ events: [], latest: 2 });
+    const poller = await startDeliveryNotifications(recording.deps);
+    expect(recording.notifications).toEqual([]); // first poll = baseline
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(recording.notifications).toHaveLength(1); // second poll = live
+    expect(recording.notifications[0].title).toBe("Needs you");
+    poller?.stop();
+  });
+
+  it("reconnect with a persisted cursor is NOT suppressed — only first connect baselines", async () => {
+    const recording = makeDeps();
+    (recording.deps.kv as unknown as { map: Map<string, string> }).map.set(
+      "letta.delivery.eventCursor",
+      "5",
+    );
+    recording.poll.mockResolvedValue({
+      events: [event(6, "approval", { summary: "Bash" })],
+      latest: 6,
+    });
+    const poller = await startDeliveryNotifications(recording.deps);
+    expect(recording.notifications).toHaveLength(1); // live event notifies immediately
     poller?.stop();
   });
 

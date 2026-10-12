@@ -55,7 +55,13 @@ export async function startDeliveryNotifications(
     return null;
   }
 
-  let cursor = Number.parseInt((await deps.kv.get(CURSOR_KEY)) ?? "0", 10);
+  // First connect = no persisted cursor. The baseline-on-first-sync doctrine
+  // (P2 ledger, resolved here): the first poll's backlog is history the user
+  // already lived through — it reaches the renderer (home refresh) but never
+  // fires a burst of OS notifications. The cursor baselines to `latest`.
+  const cursorRaw = await deps.kv.get(CURSOR_KEY);
+  let firstConnect = cursorRaw === null;
+  let cursor = Number.parseInt(cursorRaw ?? "0", 10);
   if (!Number.isFinite(cursor) || cursor < 0) cursor = 0;
 
   const tick = async (): Promise<void> => {
@@ -67,6 +73,7 @@ export async function startDeliveryNotifications(
       return;
     }
     for (const event of batch.events) {
+      if (firstConnect) continue; // baseline: history is not a notification burst
       if (event.kind === "approval" || event.kind === "problem") {
         deps.notify(
           event.kind === "approval"
@@ -91,6 +98,9 @@ export async function startDeliveryNotifications(
       cursor = batch.latest;
       await deps.kv.set(CURSOR_KEY, String(cursor));
     }
+    // The baseline applies to exactly one poll: the first. Events after the
+    // baseline (same session, later ticks) are live and notify normally.
+    firstConnect = false;
   };
 
   await tick();
