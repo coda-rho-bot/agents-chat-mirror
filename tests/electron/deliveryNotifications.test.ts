@@ -214,6 +214,25 @@ describe("startDeliveryNotifications", () => {
     poller?.stop();
   });
 
+  it("corrupt cursor baselines like first connect (§3.2 corrupt-as-unset)", async () => {
+    const recording = makeDeps();
+    (recording.deps.kv as unknown as { map: Map<string, string> }).map.set(
+      "letta.delivery.eventCursor",
+      "not-a-number",
+    );
+    recording.poll
+      .mockResolvedValueOnce({ events: [event(1, "approval")], latest: 1 })
+      .mockResolvedValue({ events: [], latest: 1 });
+    const poller = await startDeliveryNotifications(recording.deps);
+    expect(recording.notifications).toEqual([]); // corrupt = unset = baseline
+    expect(
+      (recording.deps.kv as unknown as { map: Map<string, string> }).map.get(
+        "letta.delivery.eventCursor",
+      ),
+    ).toBe("1"); // repaired to a valid cursor
+    poller?.stop();
+  });
+
   it("reconnect with a persisted cursor is NOT suppressed — only first connect baselines", async () => {
     const recording = makeDeps();
     (recording.deps.kv as unknown as { map: Map<string, string> }).map.set(

@@ -55,14 +55,16 @@ export async function startDeliveryNotifications(
     return null;
   }
 
-  // First connect = no persisted cursor. The baseline-on-first-sync doctrine
-  // (P2 ledger, resolved here): the first poll's backlog is history the user
-  // already lived through — it reaches the renderer (home refresh) but never
-  // fires a burst of OS notifications. The cursor baselines to `latest`.
+  // First connect = no persisted cursor — or a corrupt one (§3.2
+  // corrupt-as-unset): unparseable counts as unset. The baseline-on-first-sync
+  // doctrine (P2 ledger, resolved here): the first poll's backlog is history
+  // the user already lived through — it reaches the renderer (home refresh)
+  // but never fires a burst of OS notifications. The cursor baselines to
+  // `latest`.
   const cursorRaw = await deps.kv.get(CURSOR_KEY);
-  let firstConnect = cursorRaw === null;
   let cursor = Number.parseInt(cursorRaw ?? "0", 10);
-  if (!Number.isFinite(cursor) || cursor < 0) cursor = 0;
+  let firstConnect = cursorRaw === null || !Number.isFinite(cursor) || cursor < 0;
+  if (firstConnect) cursor = 0;
 
   const tick = async (): Promise<void> => {
     let batch: { events: ServiceEvent[]; latest: number };
