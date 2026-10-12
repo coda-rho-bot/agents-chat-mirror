@@ -70,18 +70,18 @@ export function HomeView() {
       <div className="mx-auto flex max-w-2xl flex-col gap-4 p-6">
         <h1 className="text-lg font-semibold text-ink-900">Home</h1>
 
-        <SectionCard title="Agents">
-          <SectionBody
-            state={home.agents}
-            loadingLabel="Loading agents…"
-            emptyLabel="No agents yet — create one to get started."
-            renderRow={(agent: AgentSummary) => (
-              <div>
-                <p className="text-sm font-medium text-ink-900">{agent.name}</p>
-                {agent.model && <p className="text-xs text-muted">{agent.model}</p>}
-              </div>
-            )}
-          />
+        {/* Canonical order (docs/CLIENT-STRATEGY.md): needs-me-first. The
+            first three sections are P4/P5 panes — honest states only. */}
+        <SectionCard title="Needs you">
+          <p className="text-sm text-muted">No approvals needed right now.</p>
+        </SectionCard>
+
+        <SectionCard title="Completed since you last looked">
+          <p className="text-sm text-muted">Nothing new since your last look.</p>
+        </SectionCard>
+
+        <SectionCard title="Problems">
+          <p className="text-sm text-muted">No problems reported.</p>
         </SectionCard>
 
         <SectionCard title="Next scheduled">
@@ -108,17 +108,18 @@ export function HomeView() {
           />
         </SectionCard>
 
-        {/* Sections 3-5 are P4/P5 panes — honest states only, no fakery. */}
-        <SectionCard title="Needs you">
-          <p className="text-sm text-muted">No approvals needed right now.</p>
-        </SectionCard>
-
-        <SectionCard title="Completed since last look">
-          <p className="text-sm text-muted">Nothing new since your last look.</p>
-        </SectionCard>
-
-        <SectionCard title="Problems">
-          <p className="text-sm text-muted">No problems reported.</p>
+        <SectionCard title="Agents">
+          <SectionBody
+            state={home.agents}
+            loadingLabel="Loading agents…"
+            emptyLabel="No agents yet — create one to get started."
+            renderRow={(agent: AgentSummary) => (
+              <div>
+                <p className="text-sm font-medium text-ink-900">{agent.name}</p>
+                {agent.model && <p className="text-xs text-muted">{agent.model}</p>}
+              </div>
+            )}
+          />
         </SectionCard>
       </div>
     </main>
