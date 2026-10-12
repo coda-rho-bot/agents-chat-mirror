@@ -7,7 +7,7 @@ import type {
   ProfileSummary,
   ScheduleSummary,
 } from "../../src/ui/types";
-import { selectNeedsYouRows } from "../../src/ui/lib/home";
+import { HOME_SECTION_TITLES, selectNeedsYouRows } from "../../src/ui/lib/home";
 
 type Store = typeof import("../../src/ui/store");
 
@@ -120,6 +120,18 @@ beforeEach(async () => {
 describe("home view", () => {
   it("is the launch view", () => {
     expect(useAppStore.getState().view).toBe("home");
+  });
+
+  it("renders the canonical five sections, in order, with no duplicates", () => {
+    const titles = Object.values(HOME_SECTION_TITLES);
+    expect(titles).toEqual([
+      "Needs you",
+      "Completed since you last looked",
+      "Problems",
+      "Next scheduled",
+      "Agents",
+    ]);
+    expect(new Set(titles).size).toBe(titles.length);
   });
 
   it("starts both sections honestly loading", () => {

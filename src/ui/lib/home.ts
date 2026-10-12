@@ -4,6 +4,19 @@ import type { ApprovalRequest, HomeProbedApproval } from "../types";
 export type NeedsYouRow = HomeProbedApproval & { source: "live" | "probe" };
 
 /**
+ * The canonical five section titles, in order (docs/CLIENT-STRATEGY.md
+ * line 67: needs-me-first). The JSX renders from this map so the order is
+ * a tested artifact, not inline strings that can drift or duplicate.
+ */
+export const HOME_SECTION_TITLES = {
+  needsYou: "Needs you",
+  completed: "Completed since you last looked",
+  problems: "Problems",
+  schedules: "Next scheduled",
+  agents: "Agents",
+} as const;
+
+/**
  * The Needs-you rows: live approvals (session events — actionable now) merge
  * with probed approvals (§2.6 discovery — lead to the conversation). Live
  * wins on requestId; oldest first, because the longest-waiting approval is

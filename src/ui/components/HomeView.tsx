@@ -1,7 +1,11 @@
 import { useAppStore } from "../store";
 import { relativeTime, toolLabel, toolSummary } from "../lib/format";
 import { envLabel, selectorMatchesComputer } from "../lib/env";
-import { selectNeedsYouRows, type NeedsYouRow } from "../lib/home";
+import {
+  HOME_SECTION_TITLES,
+  selectNeedsYouRows,
+  type NeedsYouRow,
+} from "../lib/home";
 import type {
   AgentSummary,
   CompletedRow,
@@ -186,7 +190,7 @@ export function HomeView() {
         <h1 className="text-lg font-semibold text-ink-900">Home</h1>
 
         {/* Canonical order (docs/CLIENT-STRATEGY.md): needs-me-first. */}
-        <SectionCard title="Needs you">
+        <SectionCard title={HOME_SECTION_TITLES.needsYou}>
           {needsYouRows.length > 0 ? (
             <>
               <div className="grid gap-3">
@@ -205,7 +209,7 @@ export function HomeView() {
           )}
         </SectionCard>
 
-        <SectionCard title="Completed since you last looked">
+        <SectionCard title={HOME_SECTION_TITLES.completed}>
           <SectionBody
             state={home.completed}
             loadingLabel="Checking for new outcomes…"
@@ -233,7 +237,7 @@ export function HomeView() {
           />
         </SectionCard>
 
-        <SectionCard title="Problems">
+        <SectionCard title={HOME_SECTION_TITLES.problems}>
           <SectionBody
             state={home.problems}
             loadingLabel="Checking for problems…"
@@ -259,11 +263,7 @@ export function HomeView() {
           />
         </SectionCard>
 
-        <SectionCard title="Problems">
-          <p className="text-sm text-muted">No problems reported.</p>
-        </SectionCard>
-
-        <SectionCard title="Next scheduled">
+        <SectionCard title={HOME_SECTION_TITLES.schedules}>
           <SectionBody
             state={home.schedules}
             loadingLabel="Loading schedules…"
@@ -293,7 +293,7 @@ export function HomeView() {
           />
         </SectionCard>
 
-        <SectionCard title="Agents">
+        <SectionCard title={HOME_SECTION_TITLES.agents}>
           <SectionBody
             state={home.agents}
             loadingLabel="Loading agents…"
