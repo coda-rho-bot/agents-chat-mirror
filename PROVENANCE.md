@@ -24,3 +24,37 @@ app-side surfaces come from and what they are allowed to depend on.
   honestly yields an empty list rather than an error.
 - **Honest failure:** a non-ok response or unexpected shape throws — the home
   section shows the error state; no silent fallbacks.
+
+## §2.6 approval probe — src/electron/libs/pendingApprovals.ts (Oct 12 2026, Phase 3 P4)
+
+- **Survey verdict:** the Cloud REST surface has NO per-agent awaiting-input
+  endpoint. Checked against the Letta API reference (Oct 12 2026): there is no
+  runs resource (top-level: Agents, Archives, Blocks, Embeddings, Feedback,
+  Files, Folders, Identities, Messages, Metrics, Passages, Schedule, Steps,
+  Tools, Trace, Usage); `/v1/steps` carries step statuses
+  pending/success/failed/cancelled but no approval payloads; tools
+  "Update Approval" is configuration, not pending state. Pending approvals
+  are SESSION state — the SDK's own docs say decisions "must still resolve
+  through recoverPendingApprovals() and canUseTool". So NO new REST surface
+  was added; discovery uses the SDK's §2.6 machinery instead.
+- **The probe:** `probeConversation` attaches a bare session (no canUseTool,
+  no device-state options — the probe must never intercept an approval
+  callback or mutate runtime state), reads `getDeviceStatus()`, and detaches.
+  `pendingControlRequests` projects to the app's existing `ApprovalRequest`
+  shape, so live and probed approvals share one type and one rendering path.
+- **Aggregation bound:** the home probes the most recent conversation per
+  agent (cap 20 agents), skipping conversations with live turns (their
+  approvals already flow through session events). Sequential, not parallel —
+  a reconnect burst of simultaneous session attachments would be antisocial.
+  Total probe failure throws (honest section error); partial failure stays
+  honest-partial.
+- **One approval path:** deciding routes through the EXISTING machinery —
+  live cards call `respondApprovalFor` (the same `respondApproval` IPC and
+  session-local callback); probed cards (no live turn in this client) lead
+  to the conversation, where the existing recovery path
+  (`recoverPendingApprovals` at send) takes over. No second approval path.
+- **Server-authoritative:** when the runtime advances past an approval
+  (activity "Responding" is only reachable after every pending approval of
+  the turn resolved), the store drops lingering cards — a card never claims
+  "pending" after the server has moved on, and never lingers as local-only
+  state.

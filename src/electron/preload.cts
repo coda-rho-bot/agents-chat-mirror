@@ -8,6 +8,7 @@ const METHODS = [
   "reconnect",
   "listAgents",
   "listSchedules",
+  "listPendingApprovals",
   "createAgent",
   "getAgent",
   "updateAgent",

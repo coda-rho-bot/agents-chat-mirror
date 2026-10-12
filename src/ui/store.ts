@@ -40,9 +40,13 @@ export type ChatState = {
   running: boolean;
   activity: string | null;
   error: string | null;
-  approvals: ApprovalRequest[];
+  /** Stamped on receipt so the home cards can show age/staleness. */
+  approvals: StampedApproval[];
   queue: { id: string; text: string }[];
 };
+
+/** An approval plus when this client learned of it. */
+export type StampedApproval = ApprovalRequest & { receivedAt: number };
 
 export type MemoryState = {
   loading: boolean;
@@ -147,6 +151,12 @@ type AppState = {
   send: (text: string, attachments?: AttachmentView[]) => Promise<boolean>;
   stop: () => void;
   respondApproval: (requestId: string, decision: ApprovalDecision) => void;
+  /** Same machinery as respondApproval, for a card that is not the active chat. */
+  respondApprovalFor: (
+    conversationId: string,
+    requestId: string,
+    decision: ApprovalDecision,
+  ) => void;
   removeQueued: (conversationId: string, itemId: string) => void;
   renameConversation: (conversationId: string, title: string) => Promise<void>;
   archiveConversation: (conversationId: string) => Promise<void>;
@@ -201,6 +211,7 @@ function upsertConversation(
 const HOME_INITIAL: HomeState = {
   agents: { status: "loading", rows: [], provenance: null, error: null },
   schedules: { status: "loading", rows: [], provenance: null, error: null },
+  needsYou: { status: "loading", rows: [], provenance: null, error: null },
 };
 
 const CLEARED = {
@@ -295,7 +306,18 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
       case "turn.activity":
         set((state) =>
-          patchChat(state, event.conversationId, () => ({ activity: event.activity })),
+          patchChat(state, event.conversationId, (chat) => ({
+            activity: event.activity,
+            // Server-authoritative "resolved elsewhere": the runtime only
+            // reports Responding (post-tool generation) after every pending
+            // approval of this turn has been resolved — and no new approval
+            // can fire mid-generation. If cards are still up, another client
+            // resolved them; drop them rather than let a dead card linger.
+            approvals:
+              event.activity === "Responding" && chat.approvals.length > 0
+                ? []
+                : chat.approvals,
+          })),
         );
         break;
       case "turn.queue":
@@ -320,7 +342,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           patchChat(state, event.conversationId, (chat) => ({
             approvals: [
               ...chat.approvals.filter((item) => item.requestId !== event.request.requestId),
-              event.request,
+              { ...event.request, receivedAt: Date.now() },
             ],
           })),
         );
@@ -481,9 +503,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   refreshHome: async () => {
     // Each section records its own truth: what it fetched, how, and when.
     // A failure in one section never blanks the other.
-    const [agentsResult, schedulesResult] = await Promise.allSettled([
+    const [agentsResult, schedulesResult, approvalsResult] = await Promise.allSettled([
       api.listAgents(),
       api.listSchedules(),
+      api.listPendingApprovals(),
     ]);
     const fetchedAt = Date.now();
     set(() => ({
@@ -515,6 +538,20 @@ export const useAppStore = create<AppState>((set, get) => ({
                 rows: [],
                 provenance: null,
                 error: errorMessage(schedulesResult.reason),
+              },
+        needsYou:
+          approvalsResult.status === "fulfilled"
+            ? {
+                status: "ready",
+                rows: approvalsResult.value,
+                provenance: { source: "live", fetchedAt },
+                error: null,
+              }
+            : {
+                status: "error",
+                rows: [],
+                provenance: null,
+                error: errorMessage(approvalsResult.reason),
               },
       },
     }));
@@ -571,7 +608,10 @@ export const useAppStore = create<AppState>((set, get) => ({
           hasMore: history.hasMore,
           running: history.running,
           activity: history.running ? (chat.activity ?? history.activity) : null,
-          approvals: history.approvals,
+          approvals: history.approvals.map((request) => ({
+            ...request,
+            receivedAt: Date.now(),
+          })),
         })),
       );
     } catch (error) {
@@ -691,6 +731,15 @@ export const useAppStore = create<AppState>((set, get) => ({
       })),
     );
     void api.respondApproval(activeId, requestId, decision);
+  },
+
+  respondApprovalFor: (conversationId, requestId, decision) => {
+    set((state) =>
+      patchChat(state, conversationId, (chat) => ({
+        approvals: chat.approvals.filter((item) => item.requestId !== requestId),
+      })),
+    );
+    void api.respondApproval(conversationId, requestId, decision);
   },
 
   removeQueued: (conversationId, itemId) => {

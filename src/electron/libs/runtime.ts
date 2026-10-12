@@ -51,7 +51,8 @@ import type { ComputerSummary } from "../types.js";
 import { classifyResult, contentToText } from "@angus/letta-client-core";
 import { activeProfile, getProfileSecret, onProfileSignedOut } from "./profiles.js";
 import { listAgentSchedules, mergeSchedules } from "./schedules.js";
-import type { ScheduleSummary } from "../types.js";
+import { probeConversation } from "./pendingApprovals.js";
+import type { HomeProbedApproval, ScheduleSummary } from "../types.js";
 
 /**
  * Everything that talks to Letta: the SDK client, agent and conversation
@@ -285,6 +286,39 @@ export async function listSchedules(): Promise<ScheduleSummary[]> {
   const agents = await listAgents();
   const perAgent = await Promise.all(agents.map((agent) => listAgentSchedules(agent.id)));
   return mergeSchedules(perAgent);
+}
+
+/** Probe cost bound: most recent conversation per agent, at most this many. */
+const PROBE_AGENT_CAP = 20;
+
+/**
+ * §2.6 probe: approvals pending on the runtime with no live turn in this
+ * client. Live turns' approvals already flow through events; the probe
+ * covers the rest (another client's session, or a turn this client lost).
+ * Sequential on purpose — each probe attaches a session briefly, and a
+ * reconnect burst of 20 simultaneous sessions would be antisocial.
+ * Total probe failure throws (honest section error); partial failure
+ * stays honest-partial.
+ */
+export async function listPendingApprovals(): Promise<HomeProbedApproval[]> {
+  const sdk = await ensureClient();
+  const agents = (await listAgents()).slice(0, PROBE_AGENT_CAP);
+  const found: HomeProbedApproval[] = [];
+  let failures = 0;
+  for (const agent of agents) {
+    const conversations = await listConversations(agent.id);
+    const latest = conversations[0];
+    if (!latest || turns.has(latest.id)) continue;
+    try {
+      found.push(...(await probeConversation(sdk, latest.id)));
+    } catch {
+      failures += 1;
+    }
+  }
+  if (failures > 0 && found.length === 0 && agents.length > 0) {
+    throw new Error("Could not check pending approvals — the runtime did not respond.");
+  }
+  return found;
 }
 
 export async function createAgent(input: { name: string; model?: string }): Promise<AgentSummary> {

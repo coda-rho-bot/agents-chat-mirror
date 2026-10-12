@@ -115,6 +115,17 @@ export type ScheduleSummary = {
   cronExpression: string | null;
 };
 
+/**
+ * A pending approval discovered by the §2.6 probe (no live turn in this
+ * client — the runtime is still waiting, possibly on another client).
+ */
+export type HomeProbedApproval = {
+  conversationId: string;
+  request: ApprovalRequest;
+  /** When the probe observed it (ms epoch). */
+  receivedAt: number;
+};
+
 /** One home section's honest state: loading, ready with provenance, or error. */
 export type HomeSectionState<Row> = {
   status: "loading" | "ready" | "error";
@@ -127,6 +138,8 @@ export type HomeSectionState<Row> = {
 export type HomeState = {
   agents: HomeSectionState<AgentSummary>;
   schedules: HomeSectionState<ScheduleSummary>;
+  /** Probed approvals; live approvals flow reactively via chat state. */
+  needsYou: HomeSectionState<HomeProbedApproval>;
 };
 
 /** Profile mutations: a string replaces the stored secret, omitted keeps it. */
@@ -361,6 +374,8 @@ export type AppRequests = {
   listAgents(): AgentSummary[];
   /** Scheduled messages across the account's agents (cloud REST, D1 module). */
   listSchedules(): Promise<ScheduleSummary[]>;
+  /** §2.6 probe: approvals pending on the runtime with no live turn here. */
+  listPendingApprovals(): Promise<HomeProbedApproval[]>;
   createAgent(input: { name: string; model?: string }): AgentSummary;
   getAgent(agentId: string): AgentDetails;
   updateAgent(agentId: string, update: AgentUpdate): AgentSummary;

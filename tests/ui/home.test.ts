@@ -5,6 +5,7 @@ import type {
   ProfileSummary,
   ScheduleSummary,
 } from "../../src/ui/types";
+import { selectNeedsYouRows } from "../../src/ui/lib/home";
 
 type Store = typeof import("../../src/ui/store");
 
@@ -45,6 +46,20 @@ const schedules: ScheduleSummary[] = [
   },
 ];
 
+const probedApprovals = [
+  {
+    conversationId: "conv-9",
+    request: {
+      requestId: "req-9",
+      toolCallId: null,
+      toolName: "Bash",
+      input: { command: "deploy" },
+      suggestions: [],
+    },
+    receivedAt: 1_000,
+  },
+];
+
 /** A bridge where every request resolves with something sensible. */
 function createBridge() {
   return {
@@ -56,6 +71,7 @@ function createBridge() {
     reconnect: vi.fn(),
     listAgents: vi.fn(async () => agents),
     listSchedules: vi.fn(async () => schedules),
+    listPendingApprovals: vi.fn(async () => probedApprovals),
     listProfiles: vi.fn(async () => ({
       settings,
       profiles: [profile],
@@ -84,6 +100,7 @@ describe("home view", () => {
     const { home } = useAppStore.getState();
     expect(home.agents.status).toBe("loading");
     expect(home.schedules.status).toBe("loading");
+    expect(home.needsYou.status).toBe("loading");
   });
 
   it("goHome returns to home from a chat", () => {
@@ -96,7 +113,7 @@ describe("home view", () => {
 });
 
 describe("refreshHome", () => {
-  it("fills both sections with provenance lines", async () => {
+  it("fills every section with provenance lines", async () => {
     await useAppStore.getState().refreshHome();
     const { home } = useAppStore.getState();
     expect(home.agents.status).toBe("ready");
@@ -105,6 +122,9 @@ describe("refreshHome", () => {
     expect(home.schedules.status).toBe("ready");
     expect(home.schedules.rows).toEqual(schedules);
     expect(home.schedules.provenance).toMatchObject({ source: "rest" });
+    expect(home.needsYou.status).toBe("ready");
+    expect(home.needsYou.rows).toEqual(probedApprovals);
+    expect(home.needsYou.provenance).toMatchObject({ source: "live" });
     expect(typeof home.agents.provenance?.fetchedAt).toBe("number");
   });
 
@@ -116,6 +136,7 @@ describe("refreshHome", () => {
     expect(home.agents.error).toBe("agents down");
     expect(home.schedules.status).toBe("ready");
     expect(home.schedules.rows).toEqual(schedules);
+    expect(home.needsYou.status).toBe("ready");
   });
 
   it("runs when the connection becomes ready", async () => {
@@ -127,5 +148,42 @@ describe("refreshHome", () => {
       expect(useAppStore.getState().home.agents.status).toBe("ready");
     });
     expect(bridge.listSchedules).toHaveBeenCalled();
+  });
+
+  it("feeds the probe into the Needs-you section", async () => {
+    await useAppStore.getState().refreshHome();
+    expect(bridge.listPendingApprovals).toHaveBeenCalled();
+    expect(useAppStore.getState().home.needsYou.rows).toEqual(probedApprovals);
+  });
+});
+
+describe("selectNeedsYouRows", () => {
+  it("merges live and probed approvals, live winning on requestId, oldest first", () => {
+    const chats = {
+      "conv-1": {
+        approvals: [
+          {
+            requestId: "req-2",
+            toolCallId: null,
+            toolName: "Bash",
+            input: {},
+            suggestions: [],
+            receivedAt: 2_000,
+          },
+        ],
+      },
+    };
+    const probed = [
+      // Same requestId as the live row — live wins.
+      {
+        conversationId: "conv-1",
+        request: { requestId: "req-2", toolCallId: null, toolName: "Bash", input: {}, suggestions: [] },
+        receivedAt: 1_000,
+      },
+      ...probedApprovals,
+    ];
+    const rows = selectNeedsYouRows(chats, probed);
+    expect(rows.map((row) => row.request.requestId)).toEqual(["req-9", "req-2"]);
+    expect(rows.find((row) => row.request.requestId === "req-2")?.source).toBe("live");
   });
 });

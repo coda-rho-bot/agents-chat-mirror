@@ -35,6 +35,7 @@ beforeEach(async () => {
     reconnect: vi.fn(),
     listAgents: vi.fn(async () => agents),
     listSchedules: vi.fn(async () => []),
+    listPendingApprovals: vi.fn(async () => []),
     listModels: vi.fn(async () => []),
     listProviders: vi.fn(async () => []),
     connectProvider: vi.fn(),

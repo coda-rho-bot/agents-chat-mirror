@@ -1,6 +1,82 @@
 import { useAppStore } from "../store";
-import { relativeTime } from "../lib/format";
+import { relativeTime, toolLabel, toolSummary } from "../lib/format";
+import { envLabel } from "../lib/env";
+import { selectNeedsYouRows, type NeedsYouRow } from "../lib/home";
 import type { AgentSummary, HomeSectionState, Provenance, ScheduleSummary } from "../types";
+
+const primaryButton =
+  "rounded-full bg-accent px-4 py-1.5 text-sm font-medium text-brand-content transition-opacity hover:opacity-85";
+const secondaryButton =
+  "rounded-full border border-border bg-surface px-4 py-1.5 text-sm font-medium text-ink-800 hover:bg-surface-tertiary transition-colors";
+
+/** One approval card (doc line 68): who, where, what, how old, what happens. */
+function ApprovalCard({ row }: { row: NeedsYouRow }) {
+  const conversation = useAppStore(
+    (state) => state.conversations.find((item) => item.id === row.conversationId),
+  );
+  const agentName = useAppStore((state) => state.agents.find((item) => item.id === conversation?.agentId)?.name);
+  const selector = useAppStore((state) => state.conversationEnvs[row.conversationId]?.selector);
+  const respondApprovalFor = useAppStore((state) => state.respondApprovalFor);
+  const openChat = useAppStore((state) => state.openChat);
+  const { request } = row;
+  const isQuestion = request.toolName === "AskUserQuestion";
+  const questions = (request.input as { questions?: { question: string }[] }).questions;
+
+  return (
+    <div className="rounded-xl border border-accent/30 bg-surface p-4 shadow-card">
+      <div className="flex items-baseline justify-between gap-3">
+        <p className="text-sm font-medium text-ink-900">
+          {isQuestion ? "Question from " : "Approval needed in "}
+          {agentName ?? conversation?.agentId ?? "an agent"}
+        </p>
+        <span className="text-xs text-muted-light">waiting {relativeTime(row.receivedAt)}</span>
+      </div>
+      <p className="mt-0.5 text-xs text-muted">
+        {conversation?.title ?? row.conversationId} · trigger:{" "}
+        {row.source === "live" ? "human" : "unknown"} · {envLabel(selector)}
+        {conversation?.cwd ? ` · ${conversation.cwd}` : ""}
+      </p>
+      <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-surface-tertiary p-2 font-mono text-xs text-ink-800">
+        {isQuestion
+          ? (questions ?? []).map((question) => question.question).join("\n")
+          : toolSummary(request.input) || JSON.stringify(request.input, null, 2)}
+      </pre>
+      <p className="mt-2 text-xs text-muted">
+        {isQuestion
+          ? "Answering continues the turn."
+          : `Allow runs ${toolLabel(request.toolName)}; deny cancels it with your message.`}
+      </p>
+      {row.source === "live" && !isQuestion ? (
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button
+            type="button"
+            className={primaryButton}
+            onClick={() => respondApprovalFor(row.conversationId, request.requestId, { behavior: "allow" })}
+          >
+            Allow
+          </button>
+          <button
+            type="button"
+            className={secondaryButton}
+            onClick={() =>
+              respondApprovalFor(row.conversationId, request.requestId, { behavior: "deny" })
+            }
+          >
+            Deny
+          </button>
+        </div>
+      ) : (
+        <button
+          type="button"
+          className={`${secondaryButton} mt-3`}
+          onClick={() => openChat(row.conversationId)}
+        >
+          {isQuestion ? "Open conversation to answer" : "Open conversation to decide"}
+        </button>
+      )}
+    </div>
+  );
+}
 
 /** The provenance line every home row carries — how and when it was fetched. */
 function ProvenanceLine({ provenance }: { provenance: Provenance | null }) {
@@ -62,6 +138,9 @@ function SectionBody<Row>(props: {
 /** The launch view: a read-only account overview, five sections in spec order. */
 export function HomeView() {
   const home = useAppStore((state) => state.home);
+  const needsYouRows = useAppStore((state) =>
+    selectNeedsYouRows(state.chats, state.home.needsYou.status === "ready" ? state.home.needsYou.rows : []),
+  );
   const agentName = (agentId: string) =>
     home.agents.rows.find((agent) => agent.id === agentId)?.name ?? agentId;
 
@@ -70,10 +149,25 @@ export function HomeView() {
       <div className="mx-auto flex max-w-2xl flex-col gap-4 p-6">
         <h1 className="text-lg font-semibold text-ink-900">Home</h1>
 
-        {/* Canonical order (docs/CLIENT-STRATEGY.md): needs-me-first. The
-            first three sections are P4/P5 panes — honest states only. */}
+        {/* Canonical order (docs/CLIENT-STRATEGY.md): needs-me-first.
+            Completed and Problems remain P5 panes — honest states only. */}
         <SectionCard title="Needs you">
-          <p className="text-sm text-muted">No approvals needed right now.</p>
+          {needsYouRows.length > 0 ? (
+            <>
+              <div className="grid gap-3">
+                {needsYouRows.map((row) => (
+                  <ApprovalCard key={row.request.requestId} row={row} />
+                ))}
+              </div>
+              <ProvenanceLine provenance={home.needsYou.provenance} />
+            </>
+          ) : home.needsYou.status === "loading" ? (
+            <p className="text-sm text-muted">Checking for approvals…</p>
+          ) : home.needsYou.status === "error" ? (
+            <p className="text-sm text-error">{home.needsYou.error}</p>
+          ) : (
+            <p className="text-sm text-muted">No approvals needed right now.</p>
+          )}
         </SectionCard>
 
         <SectionCard title="Completed since you last looked">

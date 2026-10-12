@@ -78,6 +78,7 @@ function createBridge() {
     reconnect: vi.fn(),
     listAgents: vi.fn(async () => agents),
     listSchedules: vi.fn(async () => []),
+    listPendingApprovals: vi.fn(async () => []),
     createAgent: vi.fn(),
     getAgent: vi.fn(),
     updateAgent: vi.fn(),
@@ -236,6 +237,46 @@ describe("turn events", () => {
 
     handleEvent({ type: "approval.resolved", conversationId: "c", requestId: "r1" });
     expect(state().chats.c?.approvals).toEqual([]);
+  });
+
+  it("stamps approvals with the time this client learned of them", () => {
+    const { handleEvent } = state();
+    handleEvent({
+      type: "approval.requested",
+      conversationId: "c",
+      request: { requestId: "r1", toolCallId: null, toolName: "Bash", input: {}, suggestions: [] },
+    });
+    const approvals = state().chats.c?.approvals ?? [];
+    expect(approvals).toHaveLength(1);
+    expect(typeof approvals[0]?.receivedAt).toBe("number");
+  });
+
+  it("clears approvals when the runtime moves past them (resolved elsewhere)", () => {
+    const { handleEvent } = state();
+    handleEvent({
+      type: "approval.requested",
+      conversationId: "c",
+      request: { requestId: "r1", toolCallId: null, toolName: "Bash", input: {}, suggestions: [] },
+    });
+    // Mid-generation phases must NOT clear — a queued approval can still be pending.
+    handleEvent({ type: "turn.activity", conversationId: "c", activity: "Thinking" });
+    expect(state().chats.c?.approvals).toHaveLength(1);
+    // Responding (post-tool generation) is only reachable after every
+    // approval of the turn resolved — a lingering card was resolved elsewhere.
+    handleEvent({ type: "turn.activity", conversationId: "c", activity: "Responding" });
+    expect(state().chats.c?.approvals).toEqual([]);
+  });
+
+  it("respondApprovalFor decides in a chat that is not the active one", () => {
+    const { handleEvent } = state();
+    handleEvent({
+      type: "approval.requested",
+      conversationId: "c",
+      request: { requestId: "r1", toolCallId: null, toolName: "Bash", input: {}, suggestions: [] },
+    });
+    useAppStore.getState().respondApprovalFor("c", "r1", { behavior: "allow" });
+    expect(state().chats.c?.approvals).toEqual([]);
+    expect(bridge.respondApproval).toHaveBeenCalledWith("c", "r1", { behavior: "allow" });
   });
 
   it("ignores conversation updates that belong to another agent", async () => {
