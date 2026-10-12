@@ -1,12 +1,15 @@
 {
-    "compilerOptions": {
-        "strict": true,
-        "target": "ES2023",
-        "module": "NodeNext",
-        "outDir": "../../dist-electron",
-        "skipLibCheck": true,
-        "noUnusedLocals": true,
-        "noUnusedParameters": true,
-        "types": ["node"]
-    }
+  "compilerOptions": {
+    "strict": true,
+    "target": "ES2023",
+    "module": "ESNext",
+    "outDir": "../../dist-electron",
+    "skipLibCheck": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "types": [
+      "node"
+    ],
+    "moduleResolution": "Bundler"
+  }
 }

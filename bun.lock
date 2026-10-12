@@ -5,7 +5,7 @@
     "": {
       "name": "letta-oss-ui",
       "dependencies": {
-        "@angus/letta-client-core": "git+https://git.angussoftware.dev/coda/letta-client-core.git#c244abbf16863083cefc65b62453b3716c9b47ce",
+        "@angus/letta-client-core": "git+https://git.angussoftware.dev/coda/letta-client-core.git#323618c47dde9e8a82bb169ef7f80599abd015fa",
         "@letta-ai/letta-agent-sdk": "0.8.39",
         "@letta-ai/letta-code": "0.34.10",
       },
@@ -59,7 +59,7 @@
   "packages": {
     "@alcalzone/ansi-tokenize": ["@alcalzone/ansi-tokenize@0.1.3", "", { "dependencies": { "ansi-styles": "^6.2.1", "is-fullwidth-code-point": "^4.0.0" } }, "sha512-3yWxPTq3UQ/FY9p1ErPxIyfT64elWaMvM9lIHnaqpyft63tkxodF5aUElYHrdisWve5cETkh1+KBw1yJuW0aRw=="],
 
-    "@angus/letta-client-core": ["@angus/letta-client-core@git+https://git.angussoftware.dev/coda/letta-client-core.git#c244abbf16863083cefc65b62453b3716c9b47ce", { "dependencies": { "@letta-ai/letta-agent-sdk": "0.8.39" } }, "c244abbf16863083cefc65b62453b3716c9b47ce"],
+    "@angus/letta-client-core": ["@angus/letta-client-core@git+https://git.angussoftware.dev/coda/letta-client-core.git#323618c47dde9e8a82bb169ef7f80599abd015fa", { "dependencies": { "@letta-ai/letta-agent-sdk": "0.8.39" } }, "323618c47dde9e8a82bb169ef7f80599abd015fa"],
 
     "@anthropic-ai/sdk": ["@anthropic-ai/sdk@0.124.0", "", { "dependencies": { "json-schema-to-ts": "^3.1.1", "standardwebhooks": "^1.0.0" }, "peerDependencies": { "zod": "^3.25.0 || ^4.0.0" }, "optionalPeers": ["zod"], "bin": { "anthropic-ai-sdk": "bin/cli" } }, "sha512-cN5O8i9UVxHeOQAzj/XjshWXG8KiibJDw9OGpH2Z/eR3n/RBxdoLxDJOcfqAJWvjaMDFfHTBADU04hWRJVkDyA=="],
 
