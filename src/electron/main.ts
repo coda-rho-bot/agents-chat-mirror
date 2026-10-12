@@ -29,6 +29,8 @@ let approvalRelay: ApprovalRelay | null = null;
 
 /** The delivery service base URL (fleet infra; the service runs on the dashboards pattern). */
 const DELIVERY_SERVICE_URL = process.env.DELIVERY_SERVICE_URL ?? "http://localhost:8788";
+/** Bearer token for the service's ingestion surface (set in deployment). */
+const DELIVERY_INGEST_TOKEN = process.env.DELIVERY_INGEST_TOKEN ?? "";
 /** Single-operator fleet: the service's user namespace. */
 const DELIVERY_USER_ID = "operator";
 
@@ -205,9 +207,11 @@ if (!app.requestSingleInstanceLock()) {
     void startApprovalRelay({
       probe: listPendingApprovals,
       send: async (event) => {
+        const headers: Record<string, string> = { "content-type": "application/json" };
+        if (DELIVERY_INGEST_TOKEN) headers.authorization = `Bearer ${DELIVERY_INGEST_TOKEN}`;
         const response = await fetch(`${DELIVERY_SERVICE_URL}/events`, {
           method: "POST",
-          headers: { "content-type": "application/json" },
+          headers,
           body: JSON.stringify(event),
         });
         if (!response.ok) {
