@@ -7,11 +7,9 @@ import {
   type MenuItemConstructorOptions,
 } from "electron";
 import { execFileSync } from "node:child_process";
-import { Notification } from "electron";
 import { join } from "node:path";
 import { broadcast, registerIpc } from "./ipc.js";
-import { kv } from "./libs/profiles.js";
-import { disconnect, initRuntime, listPendingApprovals } from "./libs/runtime.js";
+import { disconnect, initRuntime } from "./libs/runtime.js";
 import { migrateLegacySettings } from "./libs/settings.js";
 import type { AppEvent } from "./types.js";
 import { DEV_URL, getIconPath, getPreloadPath, getUIPath, isAppUrl, isDev } from "./util.js";
