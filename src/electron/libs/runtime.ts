@@ -50,6 +50,8 @@ import {
 import type { ComputerSummary } from "../types.js";
 import { classifyResult, contentToText } from "@angus/letta-client-core";
 import { activeProfile, getProfileSecret, onProfileSignedOut } from "./profiles.js";
+import { listAgentSchedules, mergeSchedules } from "./schedules.js";
+import type { ScheduleSummary } from "../types.js";
 
 /**
  * Everything that talks to Letta: the SDK client, agent and conversation
@@ -276,6 +278,13 @@ export async function listAgents(): Promise<AgentSummary[]> {
   const sdk = await ensureClient();
   const agents = await sdk.agents.list({ limit: 100 });
   return agents.map(toAgentSummary);
+}
+
+/** Scheduled messages across the account's agents, soonest first (home). */
+export async function listSchedules(): Promise<ScheduleSummary[]> {
+  const agents = await listAgents();
+  const perAgent = await Promise.all(agents.map((agent) => listAgentSchedules(agent.id)));
+  return mergeSchedules(perAgent);
 }
 
 export async function createAgent(input: { name: string; model?: string }): Promise<AgentSummary> {

@@ -95,6 +95,40 @@ export type ComputerSummary = {
   status: "online" | "offline";
 };
 
+/** How a home row's data was fetched — the home's honesty element. */
+export type Provenance = {
+  /** live: SDK stream surface; rest: direct cloud REST; cached: stored result. */
+  source: "live" | "rest" | "cached";
+  /** When the fetch completed (ms epoch). */
+  fetchedAt: number;
+};
+
+/** A scheduled message from the cloud REST API (the D1 module's projection). */
+export type ScheduleSummary = {
+  id: string;
+  agentId: string;
+  /** Best-effort first-message text; empty when the shape is unexpected. */
+  promptPreview: string;
+  /** ISO time of the next fire; null when the server has not computed one. */
+  nextScheduledTime: string | null;
+  kind: "one-time" | "recurring";
+  cronExpression: string | null;
+};
+
+/** One home section's honest state: loading, ready with provenance, or error. */
+export type HomeSectionState<Row> = {
+  status: "loading" | "ready" | "error";
+  rows: Row[];
+  provenance: Provenance | null;
+  error: string | null;
+};
+
+/** The home view's data: sections 1-2 (sections 3-5 are P4/P5 panes). */
+export type HomeState = {
+  agents: HomeSectionState<AgentSummary>;
+  schedules: HomeSectionState<ScheduleSummary>;
+};
+
 /** Profile mutations: a string replaces the stored secret, omitted keeps it. */
 export type ProfileSave = {
   /** Omitted (or unknown) creates a new profile. */
@@ -325,6 +359,8 @@ export type AppRequests = {
   setProfileEnvDefault(selector: ComputerSelectorField | null): ProfilesResult;
   removeQueuedMessage(conversationId: string, itemId: string): void;
   listAgents(): AgentSummary[];
+  /** Scheduled messages across the account's agents (cloud REST, D1 module). */
+  listSchedules(): Promise<ScheduleSummary[]>;
   createAgent(input: { name: string; model?: string }): AgentSummary;
   getAgent(agentId: string): AgentDetails;
   updateAgent(agentId: string, update: AgentUpdate): AgentSummary;

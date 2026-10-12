@@ -10,6 +10,7 @@ import {
   getConnection,
   listComputers,
   listAgents,
+  listSchedules,
   listConversations,
   loadHistory,
   reconnect,
@@ -165,6 +166,7 @@ const handlers: Handlers = {
     return profilesResult();
   },
   listAgents,
+  listSchedules,
   createAgent,
   getAgent,
   updateAgent,

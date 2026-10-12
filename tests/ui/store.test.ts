@@ -77,6 +77,7 @@ function createBridge() {
     getConnection: vi.fn(async () => ({ status: "connecting", backend: "local" })),
     reconnect: vi.fn(),
     listAgents: vi.fn(async () => agents),
+    listSchedules: vi.fn(async () => []),
     createAgent: vi.fn(),
     getAgent: vi.fn(),
     updateAgent: vi.fn(),
@@ -371,7 +372,8 @@ describe("agents", () => {
     useAppStore.setState({ activeId: "conv-1", view: "memory" });
 
     await state().deleteAgent();
-    expect(state()).toMatchObject({ agentId: null, activeId: null, view: "chat", conversations: [] });
+    // No agents left — home is the launch view, so it is the landing.
+    expect(state()).toMatchObject({ agentId: null, activeId: null, view: "home", conversations: [] });
   });
 
   it("replaces the agent in the list after an update", async () => {

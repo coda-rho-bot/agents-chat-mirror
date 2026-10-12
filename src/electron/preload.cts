@@ -7,6 +7,7 @@ const METHODS = [
   "getConnection",
   "reconnect",
   "listAgents",
+  "listSchedules",
   "createAgent",
   "getAgent",
   "updateAgent",

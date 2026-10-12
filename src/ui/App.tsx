@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { AgentSettingsDialog } from "./components/AgentSettingsDialog";
 import { ChatView } from "./components/ChatView";
+import { HomeView } from "./components/HomeView";
 import { MemoryView } from "./components/MemoryView";
 import { NewAgentDialog } from "./components/NewAgentDialog";
 import { SettingsDialog } from "./components/SettingsDialog";
@@ -57,7 +58,13 @@ export default function App() {
   return (
     <div className="flex h-screen overflow-hidden bg-surface text-ink-900">
       <Sidebar />
-      {view === "memory" ? <MemoryView key={agentId} /> : <ChatView />}
+      {view === "home" ? (
+        <HomeView />
+      ) : view === "memory" ? (
+        <MemoryView key={agentId} />
+      ) : (
+        <ChatView />
+      )}
       <SettingsDialog />
       <NewAgentDialog />
       <AgentSettingsDialog />

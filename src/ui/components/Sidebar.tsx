@@ -7,6 +7,7 @@ import type { ConnectionState, ConversationSummary } from "../types";
 import {
   CheckIcon,
   ChevronDownIcon,
+  HomeIcon,
   MemoryIcon,
   MoreIcon,
   PlusIcon,
@@ -268,9 +269,11 @@ export function Sidebar() {
   const agentId = useAppStore((state) => state.agentId);
   const connection = useAppStore((state) => state.connection);
   const openChat = useAppStore((state) => state.openChat);
+  const goHome = useAppStore((state) => state.goHome);
   const openMemory = useAppStore((state) => state.openMemory);
   const openSettings = useAppStore((state) => state.openSettings);
   const memoryOpen = useAppStore((state) => state.view === "memory");
+  const homeOpen = useAppStore((state) => state.view === "home");
   const [renaming, setRenaming] = useState<ConversationSummary | null>(null);
   const [resuming, setResuming] = useState<ConversationSummary | null>(null);
   const [now, setNow] = useState(() => Date.now());
@@ -295,6 +298,15 @@ export function Sidebar() {
           <PlusIcon className="h-4 w-4" />
           New chat
           <kbd className="ml-auto font-sans text-xs text-muted-light">{isMac ? "⌘N" : "Ctrl+N"}</kbd>
+        </button>
+        <button
+          type="button"
+          onClick={goHome}
+          aria-pressed={homeOpen}
+          className={`mt-1 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm transition-colors ${homeOpen ? "bg-ink-900/8 text-ink-900" : "text-ink-800 hover:bg-ink-900/5"}`}
+        >
+          <HomeIcon className="h-4 w-4" />
+          Home
         </button>
         <button
           type="button"

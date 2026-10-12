@@ -15,6 +15,7 @@ import type {
   ConversationEnv,
   ConnectionState,
   ConversationSummary,
+  HomeState,
   MemoryFile,
   ModelOption,
   ProfileSave,
@@ -79,7 +80,9 @@ type AppState = {
   /** null until loaded, or when the backend manages providers itself. */
   providers: ProviderSummary[] | null;
   /** What the main area shows for the selected agent. */
-  view: "chat" | "memory";
+  view: "home" | "chat" | "memory";
+  /** The home view's section data (home is the launch view). */
+  home: HomeState;
   memory: MemoryState | null;
   conversations: ConversationSummary[];
   conversationsLoaded: boolean;
@@ -122,6 +125,10 @@ type AppState = {
   updateAgent: (update: AgentUpdate) => Promise<AgentSummary>;
   deleteAgent: () => Promise<void>;
   openChat: (conversationId: string | null) => void;
+  /** Show the home view (the launch view). */
+  goHome: () => void;
+  /** Load the home's live sections; each records its own provenance. */
+  refreshHome: () => Promise<void>;
   /** Load one conversation's environment choice into the mirror. */
   loadConversationEnv: (conversationId: string) => Promise<void>;
   /** Refresh the cloud computers list for the environment menu. */
@@ -190,13 +197,20 @@ function upsertConversation(
   );
 }
 
+/** Both home sections start honestly "loading" until their fetch lands. */
+const HOME_INITIAL: HomeState = {
+  agents: { status: "loading", rows: [], provenance: null, error: null },
+  schedules: { status: "loading", rows: [], provenance: null, error: null },
+};
+
 const CLEARED = {
   agents: [],
   agentsLoaded: false,
   agentId: null,
   models: [],
   providers: null,
-  view: "chat",
+  view: "home",
+  home: HOME_INITIAL,
   memory: null,
   conversations: [],
   conversationsLoaded: false,
@@ -208,6 +222,7 @@ const CLEARED = {
   computersError: null,
   pendingFirstMessage: null,
 } satisfies Partial<AppState>;
+
 
 export const useAppStore = create<AppState>((set, get) => ({
   settings: null,
@@ -246,6 +261,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         set({ connection: event.state });
         if (event.state.status === "ready" && previous?.status !== "ready") {
           void get().refreshAgents();
+          void get().refreshHome();
         } else if (event.state.status !== "ready" && previous?.status === "ready") {
           // Agents and conversations belong to the backend that just went away.
           set(CLEARED);
@@ -390,7 +406,8 @@ export const useAppStore = create<AppState>((set, get) => ({
           conversations: [],
           conversationsLoaded: true,
           activeId: null,
-          view: "chat",
+          // No agents to chat with — home is the honest landing.
+          view: "home",
           memory: null,
         });
       }
@@ -455,6 +472,52 @@ export const useAppStore = create<AppState>((set, get) => ({
     const chat = get().chats[conversationId];
     if (!chat?.loaded && !chat?.loading) void get().loadHistory(conversationId);
     void get().loadConversationEnv(conversationId);
+  },
+
+  goHome: () => {
+    set({ view: "home" });
+  },
+
+  refreshHome: async () => {
+    // Each section records its own truth: what it fetched, how, and when.
+    // A failure in one section never blanks the other.
+    const [agentsResult, schedulesResult] = await Promise.allSettled([
+      api.listAgents(),
+      api.listSchedules(),
+    ]);
+    const fetchedAt = Date.now();
+    set(() => ({
+      home: {
+        agents:
+          agentsResult.status === "fulfilled"
+            ? {
+                status: "ready",
+                rows: agentsResult.value,
+                provenance: { source: "live", fetchedAt },
+                error: null,
+              }
+            : {
+                status: "error",
+                rows: [],
+                provenance: null,
+                error: errorMessage(agentsResult.reason),
+              },
+        schedules:
+          schedulesResult.status === "fulfilled"
+            ? {
+                status: "ready",
+                rows: schedulesResult.value,
+                provenance: { source: "rest", fetchedAt },
+                error: null,
+              }
+            : {
+                status: "error",
+                rows: [],
+                provenance: null,
+                error: errorMessage(schedulesResult.reason),
+              },
+      },
+    }));
   },
 
   loadConversationEnv: async (conversationId) => {

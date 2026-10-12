@@ -110,6 +110,13 @@ export const MemoryIcon = (props: IconProps) => (
   </Icon>
 );
 
+export const HomeIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M4 11 12 4l8 7" />
+    <path d="M6 10v10h12V10" />
+  </Icon>
+);
+
 export const HistoryIcon = (props: IconProps) => (
   <Icon {...props}>
     <path d="M3 12a9 9 0 1 0 3-6.7L3 8" />
