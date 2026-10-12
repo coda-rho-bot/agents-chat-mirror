@@ -1,32 +1,34 @@
 import { statSync } from "node:fs";
 import { basename } from "node:path";
 import { nativeImage } from "electron";
+import {
+  downscaleDimensions,
+  intakeBatch,
+  JPEG_QUALITY as CORE_JPEG_QUALITY,
+  overSourceLimit,
+  toImageContent as coreToImageContent,
+  wireContent as coreWireContent,
+} from "@angus/letta-client-core";
 import type { ImageContent, SendMessage } from "@letta-ai/letta-agent-sdk";
 
 /**
- * Image attachment intake for the composer.
+ * Image attachment intake for the composer — the Electron SHELL over the
+ * core's intake policy (@angus/letta-client-core src/attachments.ts, tier 3
+ * extraction from this file's lineage; PROVENANCE.md there pins the commit).
+ * The policy — limits, downscale math, batch cap, wire projections — lives in
+ * the core; this file is the platform decode (nativeImage) plus the thin
+ * adapters that keep the existing export sites stable for call sites.
  *
  * Downscaled and re-encoded AT INTAKE rather than at send: a modern phone
  * photo is ~4000px of base64 that would bloat every turn's context for no
  * visual gain in a chat transcript. Everything becomes a JPEG of known type,
  * so the wire media type is always "image/jpeg" regardless of source format.
- *
- * PROVENANCE (for the extraction pass): the constants and the content-part
- * builder below deliberately mirror coda/agents-chat
- * src/lib/letta/attachments.ts (the Android pane this desktop pane derives
- * from). They are duplicated here only because desktop's projection is
- * local by design (see transcript.ts); when that extraction pass unifies the
- * projections, these move to @angus/letta-client-core as their shared home.
  */
 
-/** Longest edge kept after downscaling; matches the Android pane. */
-export const MAX_EDGE = 1600;
-/** JPEG re-encode quality on Electron's 0–100 scale (Android's 0.8). */
-export const JPEG_QUALITY = 80;
-/** Source files above this are refused before decoding. */
-export const MAX_SOURCE_BYTES = 25 * 1024 * 1024;
-/** Per-message attachment cap; matches the Android pane. */
-export const MAX_ATTACHMENTS = 4;
+/** Core intake policy, re-exported at the existing sites. */
+export { MAX_EDGE, MAX_SOURCE_BYTES, MAX_ATTACHMENTS } from "@angus/letta-client-core";
+/** JPEG re-encode quality on Electron's 0–100 scale (the core's canonical 0.8). */
+export const JPEG_QUALITY = Math.round(CORE_JPEG_QUALITY * 100);
 
 /** An image ready to send: base64 data plus what the UI needs to stage it. */
 export interface AttachmentView {
@@ -44,7 +46,7 @@ export interface AttachmentView {
 export function intakeImage(path: string): AttachmentView {
   const name = basename(path);
   const size = statSync(path).size;
-  if (size > MAX_SOURCE_BYTES) {
+  if (overSourceLimit(size)) {
     throw new Error(`${name} is ${(size / 1024 / 1024).toFixed(0)}MB — over the 25MB limit`);
   }
   const source = nativeImage.createFromPath(path);
@@ -52,14 +54,10 @@ export function intakeImage(path: string): AttachmentView {
     throw new Error(`${name} could not be read as an image`);
   }
   const { width, height } = source.getSize();
-  const longest = Math.max(width, height);
-  const scale = longest > MAX_EDGE ? MAX_EDGE / longest : 1;
   // Animated formats (gif, webp) decode to their first frame — consistent
   // with the re-encode-to-JPEG doctrine.
-  const encoded =
-    scale < 1
-      ? source.resize({ width: Math.round(width * scale), height: Math.round(height * scale) })
-      : source;
+  const target = downscaleDimensions(width, height);
+  const encoded = target ? source.resize(target) : source;
   const data = encoded.toJPEG(JPEG_QUALITY).toString("base64");
   const sized = encoded.getSize();
   return {
@@ -74,10 +72,7 @@ export function intakeImage(path: string): AttachmentView {
 
 /** Attachment views as SDK image content parts (base64, no data: prefix). */
 export function toImageContent(attachments: readonly AttachmentView[]): ImageContent[] {
-  return attachments.map((attachment) => ({
-    type: "image" as const,
-    source: { type: "base64" as const, media_type: attachment.mediaType, data: attachment.data },
-  }));
+  return coreToImageContent(attachments);
 }
 
 /**
@@ -89,34 +84,18 @@ export function wireContent(
   text: string,
   attachments: readonly AttachmentView[],
 ): SendMessage {
-  if (attachments.length === 0) return text;
-  return [
-    ...toImageContent(attachments),
-    ...(text ? [{ type: "text" as const, text }] : []),
-  ];
+  return coreWireContent(text, attachments);
 }
 
 /**
- * Intake a batch of picked files: first MAX_ATTACHMENTS succeed, the rest
- * (and any unreadable/oversize ones) come back as human-readable skips so
- * the renderer can say why a pick did not land.
+ * Intake a batch of picked files: the core's cap policy over this shell's
+ * decode — first MAX_ATTACHMENTS succeed, the rest (and any unreadable/
+ * oversize ones) come back as human-readable skips so the renderer can say
+ * why a pick did not land.
  */
 export function intakeFiles(paths: readonly string[]): {
   attachments: AttachmentView[];
   skipped: string[];
 } {
-  const attachments: AttachmentView[] = [];
-  const skipped: string[] = [];
-  for (const path of paths) {
-    if (attachments.length >= MAX_ATTACHMENTS) {
-      skipped.push(`${basename(path)} — over the ${MAX_ATTACHMENTS}-image limit`);
-      continue;
-    }
-    try {
-      attachments.push(intakeImage(path));
-    } catch (error) {
-      skipped.push(error instanceof Error ? error.message : String(error));
-    }
-  }
-  return { attachments, skipped };
+  return intakeBatch(paths, intakeImage, basename);
 }

@@ -4,7 +4,8 @@ import {
   type ComputerSelectorField,
   type ConversationEnv,
 } from "@angus/letta-client-core";
-import type { Computer, ComputerSelector, LettaAgentClient } from "@letta-ai/letta-agent-sdk";
+import type { ComputerSelector, LettaAgentClient } from "@letta-ai/letta-agent-sdk";
+import { toComputerSummary } from "@angus/letta-client-core";
 import { activeProfile, kv, saveProfile } from "./profiles.js";
 import type { ComputerSummary } from "../types.js";
 
@@ -39,15 +40,9 @@ export async function setConversationEnv(
   return { selector };
 }
 
-/** Display projection of the SDK's Computer record (Android's shape). */
-export function toComputerSummary(record: Computer): ComputerSummary {
-  return {
-    deviceId: record.deviceId,
-    name: record.name,
-    connectionId: record.connectionId,
-    status: record.status,
-  };
-}
+/** Display projection of the SDK's Computer record — the core's, re-exported
+ *  at the existing site (tier 3 extraction; see PROVENANCE.md there). */
+export { toComputerSummary };
 
 /**
  * List computers registered with this Letta Cloud account. Cloud only —

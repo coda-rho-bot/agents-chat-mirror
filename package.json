@@ -30,7 +30,7 @@
   "dependencies": {
     "@letta-ai/letta-agent-sdk": "0.8.39",
     "@letta-ai/letta-code": "0.34.10",
-    "@angus/letta-client-core": "git+https://git.angussoftware.dev/coda/letta-client-core.git#b111ee8bc9f012db36a8d70ea3ee7f4c18473a85"
+    "@angus/letta-client-core": "git+https://git.angussoftware.dev/coda/letta-client-core.git#c244abbf16863083cefc65b62453b3716c9b47ce"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

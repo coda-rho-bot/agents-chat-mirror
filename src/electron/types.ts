@@ -78,7 +78,13 @@ export type ConversationEnv = {
   selector: ComputerSelectorField | null | undefined;
 };
 
-/** A computer registered with the Letta Cloud account (Android's shape). */
+/**
+ * Mirror of the core's ComputerSummary (env/computers.ts) — the renderer
+ * project compiles without node types, so this shared boundary re-declares
+ * the shape rather than importing the core source; the electron project's
+ * IPC handler assignability compile-checks the mirror against the core's
+ * type, so drift fails the build.
+ */
 export type ComputerSummary = {
   /** Stable identifier for the physical device across reconnects. */
   deviceId: string;
