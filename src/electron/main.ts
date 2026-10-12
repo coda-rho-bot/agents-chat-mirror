@@ -7,8 +7,12 @@ import {
   type MenuItemConstructorOptions,
 } from "electron";
 import { execFileSync } from "node:child_process";
+import { Notification } from "electron";
 import { join } from "node:path";
 import { broadcast, registerIpc } from "./ipc.js";
+import { startDeliveryNotifications, type DeliveryPoller } from "./libs/deliveryNotifications.js";
+import { getEvents, registerDevice } from "./libs/deliveryService.js";
+import { kv } from "./libs/profiles.js";
 import { disconnect, initRuntime } from "./libs/runtime.js";
 import { migrateLegacySettings } from "./libs/settings.js";
 import type { AppEvent } from "./types.js";
@@ -19,6 +23,12 @@ const QUIT_TIMEOUT_MS = 3_000;
 
 let mainWindow: BrowserWindow | null = null;
 let quitting = false;
+let deliveryPoller: DeliveryPoller | null = null;
+
+/** The delivery service base URL (fleet infra; the service runs on the dashboards pattern). */
+const DELIVERY_SERVICE_URL = process.env.DELIVERY_SERVICE_URL ?? "http://localhost:8788";
+/** Single-operator fleet: the service's user namespace. */
+const DELIVERY_USER_ID = "operator";
 
 /** In development, a `.env` in the project root provides connection defaults. */
 function loadDevEnv(): void {
@@ -162,6 +172,30 @@ if (!app.requestSingleInstanceLock()) {
     initRuntime(broadcast);
     createWindow();
 
+    // While-running delivery notifications (D6): poll the fleet service for
+    // events; approvals + problems notify, completions refresh silently. No
+    // tray, no daemon — the loop dies with the app.
+    void startDeliveryNotifications({
+      kv: kv(),
+      register: (token) => registerDevice(DELIVERY_SERVICE_URL, DELIVERY_USER_ID, token),
+      poll: (deviceId, since) => getEvents(DELIVERY_SERVICE_URL, deviceId, since),
+      notify: (title, body, onClick) => {
+        if (!Notification.isSupported()) return;
+        const notification = new Notification({ title, body });
+        notification.on("click", () => {
+          mainWindow?.show();
+          mainWindow?.focus();
+          onClick();
+        });
+        notification.show();
+      },
+      broadcast,
+      log: (message) => console.log(`[delivery] ${message}`),
+      intervalMs: Number.parseInt(process.env.DELIVERY_POLL_INTERVAL_MS ?? "30000", 10),
+    }).then((poller) => {
+      deliveryPoller = poller;
+    });
+
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
     });
@@ -177,6 +211,7 @@ if (!app.requestSingleInstanceLock()) {
     event.preventDefault();
     if (quitting) return;
     quitting = true;
+    deliveryPoller?.stop();
     const timeout = new Promise((resolve) => setTimeout(resolve, QUIT_TIMEOUT_MS));
     void Promise.race([disconnect(), timeout]).finally(() => app.exit(0));
   });

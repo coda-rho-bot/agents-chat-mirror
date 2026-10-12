@@ -368,7 +368,25 @@ export type AppEvent =
   | { type: "approval.resolved"; conversationId: string; requestId: string }
   | { type: "conversation.updated"; conversation: ConversationSummary }
   | { type: "profile.signed-out"; profileId: string }
+  /** Delivery-service events (silent badge updates; the home IS the badge). */
+  | { type: "delivery.events"; events: DeliveryServiceEvent[] }
+  /** An OS notification was clicked: open the conversation, or home when null. */
+  | { type: "delivery.openConversation"; conversationId: string | null }
   | { type: "menu"; command: "new-chat" | "settings" };
+
+/** One delivery event from the fleet service (typed per its documented contract). */
+export type DeliveryServiceEvent = {
+  seq: number;
+  kind: "outcome" | "problem" | "approval";
+  at: string;
+  conversationId: string | null;
+  agentId: string;
+  messageId: string | null;
+  stepId: string | null;
+  errorType: string | null;
+  requestId: string | null;
+  summary: string | null;
+};
 
 /** Renderer -> main requests. Every method is an `ipcRenderer.invoke` round trip. */
 /** A queued follow-up, from the server's queue_update frames. */

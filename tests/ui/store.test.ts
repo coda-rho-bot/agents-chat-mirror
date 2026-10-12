@@ -177,6 +177,38 @@ describe("connection", () => {
     expect(state().conversations).toEqual([]);
   });
 
+  it("delivery events refresh the home silently — no notification path, just fresh state", async () => {
+    await connect();
+    state().handleEvent({
+      type: "delivery.events",
+      events: [
+        {
+          seq: 1,
+          kind: "outcome",
+          at: "2026-10-12T00:00:00Z",
+          conversationId: "conv-1",
+          agentId: "agent-1",
+          messageId: "m-1",
+          stepId: null,
+          errorType: null,
+          requestId: null,
+          summary: null,
+        },
+      ],
+    });
+    await flush();
+    expect(bridge.listAgents).toHaveBeenCalled();
+    expect(state().home.agents.status).toBe("ready");
+  });
+
+  it("notification clicks open the conversation, or home when agent-scoped", async () => {
+    await connect();
+    state().handleEvent({ type: "delivery.openConversation", conversationId: "conv-1" });
+    expect(state().view).toBe("chat");
+    state().handleEvent({ type: "delivery.openConversation", conversationId: null });
+    expect(state().view).toBe("home");
+  });
+
   it("loads providers only when the server keeps its own keys", async () => {
     await connect();
     expect(bridge.listProviders).not.toHaveBeenCalled();
