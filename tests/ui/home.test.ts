@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AgentSummary,
+  CompletedRow,
   AppSettings,
+  ProblemRow,
   ProfileSummary,
   ScheduleSummary,
 } from "../../src/ui/types";
@@ -60,6 +62,27 @@ const probedApprovals = [
   },
 ];
 
+const completedRows: CompletedRow[] = [
+  {
+    conversationId: "conv-1",
+    agentId: "agent-1",
+    messageId: "message-9",
+    preview: "Deploy finished",
+    completedAt: "2026-10-12T00:30:00Z",
+  },
+];
+
+const problemRows: ProblemRow[] = [
+  {
+    agentId: "agent-1",
+    stepId: "step-7",
+    errorType: "llm_api_error",
+    stopReason: "error",
+    origin: null,
+    failedAt: "2026-10-12T00:20:00Z",
+  },
+];
+
 /** A bridge where every request resolves with something sensible. */
 function createBridge() {
   return {
@@ -72,6 +95,9 @@ function createBridge() {
     listAgents: vi.fn(async () => agents),
     listSchedules: vi.fn(async () => schedules),
     listPendingApprovals: vi.fn(async () => probedApprovals),
+    listCompletedSinceLastLook: vi.fn(async () => completedRows),
+    listProblems: vi.fn(async () => problemRows),
+    markConversationRead: vi.fn(async () => undefined),
     listProfiles: vi.fn(async () => ({
       settings,
       profiles: [profile],
@@ -101,6 +127,8 @@ describe("home view", () => {
     expect(home.agents.status).toBe("loading");
     expect(home.schedules.status).toBe("loading");
     expect(home.needsYou.status).toBe("loading");
+    expect(home.completed.status).toBe("loading");
+    expect(home.problems.status).toBe("loading");
   });
 
   it("goHome returns to home from a chat", () => {
@@ -125,6 +153,12 @@ describe("refreshHome", () => {
     expect(home.needsYou.status).toBe("ready");
     expect(home.needsYou.rows).toEqual(probedApprovals);
     expect(home.needsYou.provenance).toMatchObject({ source: "live" });
+    expect(home.completed.status).toBe("ready");
+    expect(home.completed.rows).toEqual(completedRows);
+    expect(home.completed.provenance).toMatchObject({ source: "live" });
+    expect(home.problems.status).toBe("ready");
+    expect(home.problems.rows).toEqual(problemRows);
+    expect(home.problems.provenance).toMatchObject({ source: "rest" });
     expect(typeof home.agents.provenance?.fetchedAt).toBe("number");
   });
 

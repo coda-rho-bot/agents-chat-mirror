@@ -79,6 +79,9 @@ function createBridge() {
     listAgents: vi.fn(async () => agents),
     listSchedules: vi.fn(async () => []),
     listPendingApprovals: vi.fn(async () => []),
+    listCompletedSinceLastLook: vi.fn(async () => []),
+    listProblems: vi.fn(async () => []),
+    markConversationRead: vi.fn(async () => undefined),
     createAgent: vi.fn(),
     getAgent: vi.fn(),
     updateAgent: vi.fn(),
@@ -277,6 +280,27 @@ describe("turn events", () => {
     useAppStore.getState().respondApprovalFor("c", "r1", { behavior: "allow" });
     expect(state().chats.c?.approvals).toEqual([]);
     expect(bridge.respondApproval).toHaveBeenCalledWith("c", "r1", { behavior: "allow" });
+  });
+
+  it("looking at a conversation advances its read cursor", () => {
+    useAppStore.getState().openChat("conv-1");
+    expect(bridge.markConversationRead).toHaveBeenCalledWith("conv-1");
+  });
+
+  it("a turn the user is watching finish counts as looked at", () => {
+    useAppStore.getState().openChat("conv-1");
+    vi.mocked(bridge.markConversationRead).mockClear();
+    const { handleEvent } = state();
+    handleEvent({ type: "turn.finished", conversationId: "conv-1", error: undefined });
+    expect(bridge.markConversationRead).toHaveBeenCalledWith("conv-1");
+  });
+
+  it("a turn finishing elsewhere does not advance the active cursor", () => {
+    useAppStore.getState().openChat("conv-1");
+    vi.mocked(bridge.markConversationRead).mockClear();
+    const { handleEvent } = state();
+    handleEvent({ type: "turn.finished", conversationId: "conv-other", error: undefined });
+    expect(bridge.markConversationRead).not.toHaveBeenCalled();
   });
 
   it("ignores conversation updates that belong to another agent", async () => {

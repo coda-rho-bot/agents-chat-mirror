@@ -129,6 +129,8 @@ type AppState = {
   updateAgent: (update: AgentUpdate) => Promise<AgentSummary>;
   deleteAgent: () => Promise<void>;
   openChat: (conversationId: string | null) => void;
+  /** One tap behind every home row that has no conversation of its own. */
+  openAgentLatest: (agentId: string) => Promise<void>;
   /** Show the home view (the launch view). */
   goHome: () => void;
   /** Load the home's live sections; each records its own provenance. */
@@ -212,6 +214,8 @@ const HOME_INITIAL: HomeState = {
   agents: { status: "loading", rows: [], provenance: null, error: null },
   schedules: { status: "loading", rows: [], provenance: null, error: null },
   needsYou: { status: "loading", rows: [], provenance: null, error: null },
+  completed: { status: "loading", rows: [], provenance: null, error: null },
+  problems: { status: "loading", rows: [], provenance: null, error: null },
 };
 
 const CLEARED = {
@@ -334,6 +338,11 @@ export const useAppStore = create<AppState>((set, get) => ({
             error: event.error ?? null,
           })),
         );
+        // The user watched this turn finish — it counts as looked at (§3.4:
+        // ordinary completion noise is the failure mode, not the goal).
+        if (event.conversationId === get().activeId) {
+          void api.markConversationRead(event.conversationId);
+        }
         // The agent may have rewritten its memory during the turn.
         if (get().view === "memory") void get().loadMemory();
         break;
@@ -494,6 +503,13 @@ export const useAppStore = create<AppState>((set, get) => ({
     const chat = get().chats[conversationId];
     if (!chat?.loaded && !chat?.loading) void get().loadHistory(conversationId);
     void get().loadConversationEnv(conversationId);
+    // Looking advances the read cursor (§3.3) — app-owned, in main.
+    if (conversationId) void api.markConversationRead(conversationId);
+  },
+
+  openAgentLatest: async (agentId) => {
+    const conversations = await api.listConversations(agentId);
+    if (conversations[0]) get().openChat(conversations[0].id);
   },
 
   goHome: () => {
@@ -503,10 +519,18 @@ export const useAppStore = create<AppState>((set, get) => ({
   refreshHome: async () => {
     // Each section records its own truth: what it fetched, how, and when.
     // A failure in one section never blanks the other.
-    const [agentsResult, schedulesResult, approvalsResult] = await Promise.allSettled([
+    const [
+      agentsResult,
+      schedulesResult,
+      approvalsResult,
+      completedResult,
+      problemsResult,
+    ] = await Promise.allSettled([
       api.listAgents(),
       api.listSchedules(),
       api.listPendingApprovals(),
+      api.listCompletedSinceLastLook(),
+      api.listProblems(),
     ]);
     const fetchedAt = Date.now();
     set(() => ({
@@ -553,8 +577,41 @@ export const useAppStore = create<AppState>((set, get) => ({
                 provenance: null,
                 error: errorMessage(approvalsResult.reason),
               },
+        completed:
+          completedResult.status === "fulfilled"
+            ? {
+                status: "ready",
+                rows: completedResult.value,
+                provenance: { source: "live", fetchedAt },
+                error: null,
+              }
+            : {
+                status: "error",
+                rows: [],
+                provenance: null,
+                error: errorMessage(completedResult.reason),
+              },
+        problems:
+          problemsResult.status === "fulfilled"
+            ? {
+                status: "ready",
+                rows: problemsResult.value,
+                provenance: { source: "rest", fetchedAt },
+                error: null,
+              }
+            : {
+                status: "error",
+                rows: [],
+                provenance: null,
+                error: errorMessage(problemsResult.reason),
+              },
       },
     }));
+    // Schedule rows show the configured target's online status; computers
+    // load lazily elsewhere, so a cloud home refresh ensures they are in.
+    if (schedulesResult.status === "fulfilled" && schedulesResult.value.length > 0) {
+      void get().refreshComputers();
+    }
   },
 
   loadConversationEnv: async (conversationId) => {

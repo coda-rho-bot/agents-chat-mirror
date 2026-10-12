@@ -1,8 +1,15 @@
 import { useAppStore } from "../store";
 import { relativeTime, toolLabel, toolSummary } from "../lib/format";
-import { envLabel } from "../lib/env";
+import { envLabel, selectorMatchesComputer } from "../lib/env";
 import { selectNeedsYouRows, type NeedsYouRow } from "../lib/home";
-import type { AgentSummary, HomeSectionState, Provenance, ScheduleSummary } from "../types";
+import type {
+  AgentSummary,
+  CompletedRow,
+  HomeSectionState,
+  ProblemRow,
+  Provenance,
+  ScheduleSummary,
+} from "../types";
 
 const primaryButton =
   "rounded-full bg-accent px-4 py-1.5 text-sm font-medium text-brand-content transition-opacity hover:opacity-85";
@@ -124,8 +131,16 @@ function SectionBody<Row>(props: {
   return (
     <>
       <ul className="divide-y divide-border">
-        {state.rows.map((row) => (
-          <li key={(row as { id: string }).id} className="py-2">
+        {state.rows.map((row, index) => (
+          <li
+            key={
+              (row as { id?: string }).id ??
+              (row as { conversationId?: string }).conversationId ??
+              (row as { stepId?: string }).stepId ??
+              index
+            }
+            className="py-2"
+          >
             {renderRow(row)}
           </li>
         ))}
@@ -138,19 +153,39 @@ function SectionBody<Row>(props: {
 /** The launch view: a read-only account overview, five sections in spec order. */
 export function HomeView() {
   const home = useAppStore((state) => state.home);
+  const openChat = useAppStore((state) => state.openChat);
+  const openAgentLatest = useAppStore((state) => state.openAgentLatest);
+  const conversations = useAppStore((state) => state.conversations);
+  const profileSelector = useAppStore(
+    ({ profiles, settings }) => {
+      const id = settings?.activeProfileId;
+      return id ? profiles.find((item) => item.id === id)?.computerSelector : undefined;
+    },
+  );
+  const computers = useAppStore((state) => state.computers);
   const needsYouRows = useAppStore((state) =>
     selectNeedsYouRows(state.chats, state.home.needsYou.status === "ready" ? state.home.needsYou.rows : []),
   );
   const agentName = (agentId: string) =>
     home.agents.rows.find((agent) => agent.id === agentId)?.name ?? agentId;
+  const conversationTitle = (conversationId: string) =>
+    conversations.find((item) => item.id === conversationId)?.title ?? null;
+  // Scheduled runs execute on the agent's default env: the account default
+  // computer, or Cloud Sandbox when unset. The row shows the configured
+  // target plus its online status — the silent-fallback lesson, structural.
+  const scheduleTarget = () => {
+    const label = envLabel(profileSelector);
+    if (profileSelector === null || profileSelector === undefined) return label;
+    const computer = computers.find((item) => selectorMatchesComputer(profileSelector, item));
+    return computer ? `${label} · ${computer.status}` : `${label} · status unknown`;
+  };
 
   return (
     <main className="flex-1 overflow-y-auto">
       <div className="mx-auto flex max-w-2xl flex-col gap-4 p-6">
         <h1 className="text-lg font-semibold text-ink-900">Home</h1>
 
-        {/* Canonical order (docs/CLIENT-STRATEGY.md): needs-me-first.
-            Completed and Problems remain P5 panes — honest states only. */}
+        {/* Canonical order (docs/CLIENT-STRATEGY.md): needs-me-first. */}
         <SectionCard title="Needs you">
           {needsYouRows.length > 0 ? (
             <>
@@ -171,7 +206,57 @@ export function HomeView() {
         </SectionCard>
 
         <SectionCard title="Completed since you last looked">
-          <p className="text-sm text-muted">Nothing new since your last look.</p>
+          <SectionBody
+            state={home.completed}
+            loadingLabel="Checking for new outcomes…"
+            emptyLabel="Nothing new since your last look."
+            renderRow={(row: CompletedRow) => (
+              <button
+                type="button"
+                className="w-full text-left"
+                onClick={() => openChat(row.conversationId)}
+              >
+                <p className="text-sm font-medium text-ink-900">
+                  {agentName(row.agentId)}
+                </p>
+                <p className="mt-0.5 line-clamp-2 text-xs text-ink-800">{row.preview}</p>
+                <p className="mt-0.5 text-xs text-muted">
+                  {[
+                    conversationTitle(row.conversationId),
+                    relativeTime(Date.parse(row.completedAt)),
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </p>
+              </button>
+            )}
+          />
+        </SectionCard>
+
+        <SectionCard title="Problems">
+          <SectionBody
+            state={home.problems}
+            loadingLabel="Checking for problems…"
+            emptyLabel="No problems reported."
+            renderRow={(row: ProblemRow) => (
+              <button
+                type="button"
+                className="w-full text-left"
+                onClick={() => void openAgentLatest(row.agentId)}
+              >
+                <p className="text-sm font-medium text-ink-900">
+                  {agentName(row.agentId)} hit a failure
+                </p>
+                <p className="mt-0.5 text-xs text-ink-800">
+                  {row.errorType ?? row.stopReason ?? "run failed"}
+                  {row.origin ? ` · via ${row.origin}` : ""}
+                </p>
+                <p className="mt-0.5 text-xs text-muted">
+                  {relativeTime(Date.parse(row.failedAt))} · opens latest conversation
+                </p>
+              </button>
+            )}
+          />
         </SectionCard>
 
         <SectionCard title="Problems">
@@ -184,7 +269,11 @@ export function HomeView() {
             loadingLabel="Loading schedules…"
             emptyLabel="No scheduled prompts."
             renderRow={(schedule: ScheduleSummary) => (
-              <div>
+              <button
+                type="button"
+                className="w-full text-left"
+                onClick={() => void openAgentLatest(schedule.agentId)}
+              >
                 <p className="text-sm font-medium text-ink-900">
                   {schedule.promptPreview || "Scheduled prompt"}
                 </p>
@@ -193,11 +282,13 @@ export function HomeView() {
                   {schedule.nextScheduledTime
                     ? new Date(schedule.nextScheduledTime).toLocaleString()
                     : "next time pending"}
+                  {schedule.kind === "one-time" ? " · one-time" : ""}
                   {schedule.kind === "recurring" && schedule.cronExpression
                     ? ` · ${schedule.cronExpression}`
                     : ""}
+                  {` · runs on ${scheduleTarget()}`}
                 </p>
-              </div>
+              </button>
             )}
           />
         </SectionCard>

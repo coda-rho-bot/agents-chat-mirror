@@ -49,10 +49,18 @@ import {
 } from "./env.js";
 import type { ComputerSummary } from "../types.js";
 import { classifyResult, contentToText } from "@angus/letta-client-core";
-import { activeProfile, getProfileSecret, onProfileSignedOut } from "./profiles.js";
+import { activeProfile, getProfileSecret, kv, onProfileSignedOut } from "./profiles.js";
 import { listAgentSchedules, mergeSchedules } from "./schedules.js";
 import { probeConversation } from "./pendingApprovals.js";
-import type { HomeProbedApproval, ScheduleSummary } from "../types.js";
+import { listAgentProblems } from "./steps.js";
+import { newOutcomesSince, toCompletedRow } from "./completed.js";
+import { readCursor, writeCursor } from "./readCursors.js";
+import type {
+  CompletedRow,
+  HomeProbedApproval,
+  ProblemRow,
+  ScheduleSummary,
+} from "../types.js";
 
 /**
  * Everything that talks to Letta: the SDK client, agent and conversation
@@ -319,6 +327,78 @@ export async function listPendingApprovals(): Promise<HomeProbedApproval[]> {
     throw new Error("Could not check pending approvals — the runtime did not respond.");
   }
   return found;
+}
+
+/** Home scan bound: at most this many agents get per-conversation scans. */
+const SCAN_AGENT_CAP = 20;
+
+/**
+ * Advance the conversation's read cursor to its newest message (§3.3).
+ * Called when the user looks: on open, and when a turn they are watching
+ * finishes. The cursor is app-owned (profiles.json kv, keyed by profile),
+ * never agent memory.
+ */
+export async function markConversationRead(conversationId: string): Promise<void> {
+  const profile = activeProfile();
+  if (!profile) return;
+  const sdk = await ensureClient();
+  const page = await sdk.conversations.listMessages(conversationId, { limit: 1, order: "desc" });
+  const latest = page.messages[0];
+  await writeCursor(kv(), profile.id, conversationId, {
+    messageId: latest?.id ?? null,
+    serverAt: latest?.date ?? null,
+  });
+}
+
+/**
+ * "Completed since you last looked" (§3.1/§3.2): material outcomes only,
+ * one row per conversation, newer than that conversation's read cursor.
+ * A conversation with no cursor gets its BASELINE established (cursor =
+ * newest message) and surfaces nothing — the first sync never floods the
+ * home with the historical backlog. Unchanged conversations are pruned by
+ * the cursor's server-side date before any message fetch.
+ */
+export async function listCompletedSinceLastLook(): Promise<CompletedRow[]> {
+  const profile = activeProfile();
+  if (!profile) return [];
+  const sdk = await ensureClient();
+  const store = kv();
+  const agents = (await listAgents()).slice(0, SCAN_AGENT_CAP);
+  const rows: CompletedRow[] = [];
+  for (const agent of agents) {
+    const conversations = await listConversations(agent.id);
+    for (const conversation of conversations) {
+      const cursor = await readCursor(store, profile.id, conversation.id);
+      if (!cursor) {
+        await markConversationRead(conversation.id);
+        continue;
+      }
+      if (cursor.serverAt && conversation.updatedAt <= Date.parse(cursor.serverAt)) continue;
+      const page = await sdk.conversations.listMessages(conversation.id, { limit: 10, order: "desc" });
+      const row = toCompletedRow(
+        conversation.id,
+        agent.id,
+        newOutcomesSince(page.messages, cursor.messageId),
+      );
+      if (row) rows.push(row);
+    }
+  }
+  return rows.sort((a, b) => b.completedAt.localeCompare(a.completedAt));
+}
+
+/**
+ * "Problems" (§3.4): observed run failures via the D2 steps module — the
+ * latest failed step per agent, newest first. Missed schedules and
+ * delivery failures are not derivable from the surveyed surfaces (see
+ * steps.ts); failed scheduled runs do surface, since scheduled messages
+ * execute through the same pipeline and leave steps.
+ */
+export async function listProblems(): Promise<ProblemRow[]> {
+  const agents = (await listAgents()).slice(0, SCAN_AGENT_CAP);
+  const perAgent = await Promise.all(agents.map((agent) => listAgentProblems(agent.id)));
+  return perAgent
+    .filter((row): row is ProblemRow => row !== null)
+    .sort((a, b) => b.failedAt.localeCompare(a.failedAt));
 }
 
 export async function createAgent(input: { name: string; model?: string }): Promise<AgentSummary> {

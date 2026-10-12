@@ -126,6 +126,30 @@ export type HomeProbedApproval = {
   receivedAt: number;
 };
 
+/** One material outcome completed since the conversation's read cursor. */
+export type CompletedRow = {
+  conversationId: string;
+  agentId: string;
+  /** The latest new assistant message (one row per conversation, §3.1). */
+  messageId: string;
+  /** Best-effort text of that outcome. */
+  preview: string;
+  /** Server-side date (ISO) of that outcome. */
+  completedAt: string;
+};
+
+/** One observed run failure (latest failed step per agent, collapsed). */
+export type ProblemRow = {
+  agentId: string;
+  stepId: string;
+  errorType: string | null;
+  stopReason: string | null;
+  /** The surface that initiated the failed step, when reported. */
+  origin: string | null;
+  /** Server-side date (ISO) of the failed step. */
+  failedAt: string;
+};
+
 /** One home section's honest state: loading, ready with provenance, or error. */
 export type HomeSectionState<Row> = {
   status: "loading" | "ready" | "error";
@@ -140,6 +164,10 @@ export type HomeState = {
   schedules: HomeSectionState<ScheduleSummary>;
   /** Probed approvals; live approvals flow reactively via chat state. */
   needsYou: HomeSectionState<HomeProbedApproval>;
+  /** Material outcomes newer than each conversation's read cursor. */
+  completed: HomeSectionState<CompletedRow>;
+  /** Observed run failures (steps), newest first. */
+  problems: HomeSectionState<ProblemRow>;
 };
 
 /** Profile mutations: a string replaces the stored secret, omitted keeps it. */
@@ -376,6 +404,12 @@ export type AppRequests = {
   listSchedules(): Promise<ScheduleSummary[]>;
   /** §2.6 probe: approvals pending on the runtime with no live turn here. */
   listPendingApprovals(): Promise<HomeProbedApproval[]>;
+  /** §3.1 outcomes newer than each conversation's app-owned read cursor. */
+  listCompletedSinceLastLook(): Promise<CompletedRow[]>;
+  /** Observed run failures via the D2 steps module, newest first. */
+  listProblems(): Promise<ProblemRow[]>;
+  /** Advance the conversation's read cursor to its newest message (§3.3). */
+  markConversationRead(conversationId: string): Promise<void>;
   createAgent(input: { name: string; model?: string }): AgentSummary;
   getAgent(agentId: string): AgentDetails;
   updateAgent(agentId: string, update: AgentUpdate): AgentSummary;
