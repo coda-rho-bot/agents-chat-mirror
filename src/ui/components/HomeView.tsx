@@ -1,6 +1,7 @@
 import { useAppStore } from "../store";
 import { relativeTime, toolLabel, toolSummary } from "../lib/format";
 import { envLabel, selectorMatchesComputer } from "../lib/env";
+import { useMemo } from "react";
 import {
   HOME_SECTION_TITLES,
   selectNeedsYouRows,
@@ -9,11 +10,19 @@ import {
 import type {
   AgentSummary,
   CompletedRow,
+  HomeProbedApproval,
   HomeSectionState,
   ProblemRow,
   Provenance,
   ScheduleSummary,
 } from "../types";
+
+/**
+ * Stable empty for the not-ready branch: a `[]` literal in the selector
+ * would be a fresh reference on every store notification, which React 19's
+ * useSyncExternalStore rejects as an unstable getSnapshot.
+ */
+const NO_PROBED: HomeProbedApproval[] = [];
 
 const primaryButton =
   "rounded-full bg-accent px-4 py-1.5 text-sm font-medium text-brand-content transition-opacity hover:opacity-85";
@@ -167,8 +176,17 @@ export function HomeView() {
     },
   );
   const computers = useAppStore((state) => state.computers);
-  const needsYouRows = useAppStore((state) =>
-    selectNeedsYouRows(state.chats, state.home.needsYou.status === "ready" ? state.home.needsYou.rows : []),
+  // Deriving rows INSIDE the selector builds a fresh array of fresh objects
+  // on every store notification — an unstable snapshot that React 19
+  // rejects with "Maximum update depth exceeded" (the HomeView mount crash).
+  // Subscribe to stable slices, derive with useMemo keyed on their refs.
+  const chats = useAppStore((state) => state.chats);
+  const probedApprovals = useAppStore((state) =>
+    state.home.needsYou.status === "ready" ? state.home.needsYou.rows : NO_PROBED,
+  );
+  const needsYouRows = useMemo(
+    () => selectNeedsYouRows(chats, probedApprovals),
+    [chats, probedApprovals],
   );
   const agentName = (agentId: string) =>
     home.agents.rows.find((agent) => agent.id === agentId)?.name ?? agentId;
