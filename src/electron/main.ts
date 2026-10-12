@@ -10,9 +10,6 @@ import { execFileSync } from "node:child_process";
 import { Notification } from "electron";
 import { join } from "node:path";
 import { broadcast, registerIpc } from "./ipc.js";
-import { startDeliveryNotifications, type DeliveryPoller } from "./libs/deliveryNotifications.js";
-import { startApprovalRelay, type ApprovalRelay } from "./libs/approvalRelay.js";
-import { getEvents, registerDevice } from "./libs/deliveryService.js";
 import { kv } from "./libs/profiles.js";
 import { disconnect, initRuntime, listPendingApprovals } from "./libs/runtime.js";
 import { migrateLegacySettings } from "./libs/settings.js";
@@ -24,15 +21,8 @@ const QUIT_TIMEOUT_MS = 3_000;
 
 let mainWindow: BrowserWindow | null = null;
 let quitting = false;
-let deliveryPoller: DeliveryPoller | null = null;
-let approvalRelay: ApprovalRelay | null = null;
-
-/** The delivery service base URL (fleet infra; the service runs on the dashboards pattern). */
-const DELIVERY_SERVICE_URL = process.env.DELIVERY_SERVICE_URL ?? "http://localhost:8788";
 /** Bearer token for the service's ingestion surface (set in deployment). */
-const DELIVERY_INGEST_TOKEN = process.env.DELIVERY_INGEST_TOKEN ?? "";
 /** Single-operator fleet: the service's user namespace. */
-const DELIVERY_USER_ID = "operator";
 
 /** In development, a `.env` in the project root provides connection defaults. */
 function loadDevEnv(): void {
@@ -176,55 +166,6 @@ if (!app.requestSingleInstanceLock()) {
     initRuntime(broadcast);
     createWindow();
 
-    // While-running delivery notifications (D6): poll the fleet service for
-    // events; approvals + problems notify, completions refresh silently. No
-    // tray, no daemon — the loop dies with the app.
-    void startDeliveryNotifications({
-      kv: kv(),
-      register: (token) => registerDevice(DELIVERY_SERVICE_URL, DELIVERY_USER_ID, token),
-      poll: (deviceId, since) => getEvents(DELIVERY_SERVICE_URL, deviceId, since),
-      notify: (title, body, onClick) => {
-        if (!Notification.isSupported()) return;
-        const notification = new Notification({ title, body });
-        notification.on("click", () => {
-          mainWindow?.show();
-          mainWindow?.focus();
-          onClick();
-        });
-        notification.show();
-      },
-      broadcast,
-      log: (message) => console.log(`[delivery] ${message}`),
-      intervalMs: Number.parseInt(process.env.DELIVERY_POLL_INTERVAL_MS ?? "30000", 10),
-    }).then((poller) => {
-      deliveryPoller = poller;
-    });
-
-    // The P4 probe-relay: this desktop is the fleet's approval-discovery
-    // source (D4) — probe on a minutes-bounded cadence and relay NEW
-    // approvals to the service so phones get them as pushes. Same D6
-    // lifecycle: while-running, no daemon, dies with the app.
-    void startApprovalRelay({
-      probe: listPendingApprovals,
-      send: async (event) => {
-        const headers: Record<string, string> = { "content-type": "application/json" };
-        if (DELIVERY_INGEST_TOKEN) headers.authorization = `Bearer ${DELIVERY_INGEST_TOKEN}`;
-        const response = await fetch(`${DELIVERY_SERVICE_URL}/events`, {
-          method: "POST",
-          headers,
-          body: JSON.stringify(event),
-        });
-        if (!response.ok) {
-          throw new Error(`Delivery service rejected approval relay (${response.status}).`);
-        }
-      },
-      kv: kv(),
-      log: (message) => console.log(`[delivery-relay] ${message}`),
-      intervalMs: Number.parseInt(process.env.DELIVERY_RELAY_INTERVAL_MS ?? "300000", 10),
-    }).then((relay) => {
-      approvalRelay = relay;
-    });
-
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
     });
@@ -240,8 +181,6 @@ if (!app.requestSingleInstanceLock()) {
     event.preventDefault();
     if (quitting) return;
     quitting = true;
-    deliveryPoller?.stop();
-    approvalRelay?.stop();
     const timeout = new Promise((resolve) => setTimeout(resolve, QUIT_TIMEOUT_MS));
     void Promise.race([disconnect(), timeout]).finally(() => app.exit(0));
   });

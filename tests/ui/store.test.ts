@@ -201,14 +201,6 @@ describe("connection", () => {
     expect(state().home.agents.status).toBe("ready");
   });
 
-  it("notification clicks open the conversation, or home when agent-scoped", async () => {
-    await connect();
-    state().handleEvent({ type: "delivery.openConversation", conversationId: "conv-1" });
-    expect(state().view).toBe("chat");
-    state().handleEvent({ type: "delivery.openConversation", conversationId: null });
-    expect(state().view).toBe("home");
-  });
-
   it("loads providers only when the server keeps its own keys", async () => {
     await connect();
     expect(bridge.listProviders).not.toHaveBeenCalled();
