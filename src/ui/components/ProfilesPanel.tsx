@@ -136,6 +136,10 @@ export function ProfilesPanel() {
 
   const activeProfileId = settings?.activeProfileId ?? null;
   const editing = draft?.id ? profiles.find((item) => item.id === draft.id) : undefined;
+  // Env-inferred cloud (profile-less) must not paint "This computer" as
+  // selected — the radio would deny the connection the badge reports.
+  const envCloud = activeProfileId === null && connection?.backend === "cloud";
+  const localSelected = activeProfileId === null && !envCloud;
 
   const run = async (action: () => Promise<void>): Promise<void> => {
     setBusy(true);
@@ -190,13 +194,13 @@ export function ProfilesPanel() {
       <fieldset className="grid gap-2">
         <legend className="mb-2 text-xs font-medium text-ink-700">Where your agents live</legend>
         <label
-          className={`flex cursor-pointer gap-3 rounded-xl border px-3.5 py-3 transition-colors ${activeProfileId === null ? "border-accent bg-accent-subtle" : "border-border hover:bg-surface-tertiary"}`}
+          className={`flex cursor-pointer gap-3 rounded-xl border px-3.5 py-3 transition-colors ${localSelected ? "border-accent bg-accent-subtle" : "border-border hover:bg-surface-tertiary"}`}
         >
           <input
             type="radio"
             name="profile"
             className="mt-1 accent-[var(--color-accent)]"
-            checked={activeProfileId === null}
+            checked={localSelected}
             disabled={busy}
             onChange={() => void run(() => switchProfile(null))}
           />
@@ -207,6 +211,14 @@ export function ProfilesPanel() {
             </span>
           </span>
         </label>
+        {envCloud && (
+          <p className="rounded-xl border border-border bg-surface-tertiary px-3.5 py-2.5 text-xs text-muted">
+            Connected to Letta Cloud with credentials from this app&apos;s environment
+            (LETTA_API_KEY). No profile is saved — nothing is stored by the app.
+            Choosing &quot;This computer&quot; switches to the local backend and remembers
+            that choice.
+          </p>
+        )}
         {profiles.map((profile) => (
           <ProfileRow
             key={profile.id}

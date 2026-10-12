@@ -130,6 +130,12 @@ const handlers: Handlers = {
   },
   setActiveProfile: async (profileId) => {
     await setActiveProfileId(profileId);
+    if (profileId === null) {
+      // Choosing "This computer" is an explicit backend decision: persist it
+      // so an inherited cloud env key (LETTA_API_KEY) cannot silently flip
+      // the connection back to cloud on the next launch.
+      updateSettings({ backend: "local" });
+    }
     const result = await profilesResult();
     void reconnect();
     return result;

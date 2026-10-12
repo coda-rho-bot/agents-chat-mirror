@@ -114,6 +114,10 @@ export function getConnectionConfig(): ConnectionConfig {
   const stored = load();
   const apiKey = decodeSecret(stored.apiKey) || env("LETTA_API_KEY");
   const envBackend = env("LETTA_BACKEND").toLowerCase() as BackendKind;
+  // The stored backend is an explicit user choice made in Settings; it wins
+  // over environment inference so "This computer" stays chosen across
+  // launches even when the launcher's environment carries a cloud key
+  // (e.g. the app started from an agent session with LETTA_API_KEY set).
   const backend =
     stored.backend ??
     (BACKENDS.includes(envBackend) ? envBackend : apiKey ? "cloud" : "local");

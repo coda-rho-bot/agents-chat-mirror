@@ -51,6 +51,30 @@ afterEach(() => {
   rmSync(userData, { recursive: true, force: true });
 });
 
+describe("env-fallback honesty", () => {
+  it("keeps an explicitly chosen local backend when an env API key appears later", async () => {
+    // The user chose "This computer" first (settings wrote backend: local)...
+    settings.updateSettings({ backend: "local" });
+    // ...then the app is relaunched from an environment carrying a cloud key.
+    vi.stubEnv("LETTA_API_KEY", "sk-env");
+    await restart();
+    expect(settings.getConnectionConfig().backend).toBe("local");
+  });
+
+  it("still infers cloud from the env key when nothing was chosen", async () => {
+    vi.stubEnv("LETTA_API_KEY", "sk-env");
+    await restart();
+    expect(settings.getConnectionConfig().backend).toBe("cloud");
+  });
+
+  it("a stored backend other than local also beats env inference", async () => {
+    settings.updateSettings({ backend: "remote" });
+    vi.stubEnv("LETTA_API_KEY", "sk-env");
+    await restart();
+    expect(settings.getConnectionConfig().backend).toBe("remote");
+  });
+});
+
 describe("backend selection", () => {
   it("defaults to the local backend", () => {
     expect(settings.getSettings()).toMatchObject({ backend: "local", hasApiKey: false, permissionMode: "standard" });

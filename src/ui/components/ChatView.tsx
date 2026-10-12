@@ -21,6 +21,9 @@ function Centered({ children }: { children: React.ReactNode }) {
 function Placeholder() {
   const connection = useAppStore((state) => state.connection);
   const agentsLoaded = useAppStore((state) => state.agentsLoaded);
+  const settings = useAppStore((state) => state.settings);
+  const envCloudConnection =
+    settings?.activeProfileId == null && connection?.backend === "cloud";
   const agent = useAppStore((state) => state.agents.find((item) => item.id === state.agentId));
   const reconnect = useAppStore((state) => state.reconnect);
   const openSettings = useAppStore((state) => state.openSettings);
@@ -54,6 +57,25 @@ function Placeholder() {
       <Centered>
         <Spinner className="h-5 w-5 text-muted" />
         <p className="mt-3 text-sm text-muted">Starting Letta</p>
+      </Centered>
+    );
+  }
+
+  if (envCloudConnection) {
+    return (
+      <Centered>
+        <h2 className="text-lg font-semibold text-ink-900">Connected via environment credentials</h2>
+        <p className="mt-2 max-w-sm text-sm text-muted">
+          The app found a Letta API key in its environment and connected to Letta Cloud with it.
+          No sign-in is saved — see Settings → Profiles to choose where your agents live.
+        </p>
+        <button
+          type="button"
+          className="button-secondary mt-5"
+          onClick={() => openSettings("connection")}
+        >
+          Open Settings
+        </button>
       </Centered>
     );
   }
