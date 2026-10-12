@@ -373,11 +373,6 @@ export const useAppStore = create<AppState>((set, get) => ({
         if (event.command === "new-chat") get().openChat(null);
         else get().openSettings("connection");
         break;
-        // A notification was clicked. With a conversation, chat is one tap
-        // behind every item; without one (agent-scoped problems), home.
-        if (event.conversationId) get().openChat(event.conversationId);
-        else get().goHome();
-        break;
       case "profile.signed-out": {
         const profile = get().profiles.find((item) => item.id === event.profileId);
         set({
