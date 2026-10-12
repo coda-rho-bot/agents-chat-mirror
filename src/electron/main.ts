@@ -11,9 +11,10 @@ import { Notification } from "electron";
 import { join } from "node:path";
 import { broadcast, registerIpc } from "./ipc.js";
 import { startDeliveryNotifications, type DeliveryPoller } from "./libs/deliveryNotifications.js";
+import { startApprovalRelay, type ApprovalRelay } from "./libs/approvalRelay.js";
 import { getEvents, registerDevice } from "./libs/deliveryService.js";
 import { kv } from "./libs/profiles.js";
-import { disconnect, initRuntime } from "./libs/runtime.js";
+import { disconnect, initRuntime, listPendingApprovals } from "./libs/runtime.js";
 import { migrateLegacySettings } from "./libs/settings.js";
 import type { AppEvent } from "./types.js";
 import { DEV_URL, getIconPath, getPreloadPath, getUIPath, isAppUrl, isDev } from "./util.js";
@@ -24,6 +25,7 @@ const QUIT_TIMEOUT_MS = 3_000;
 let mainWindow: BrowserWindow | null = null;
 let quitting = false;
 let deliveryPoller: DeliveryPoller | null = null;
+let approvalRelay: ApprovalRelay | null = null;
 
 /** The delivery service base URL (fleet infra; the service runs on the dashboards pattern). */
 const DELIVERY_SERVICE_URL = process.env.DELIVERY_SERVICE_URL ?? "http://localhost:8788";
@@ -196,6 +198,29 @@ if (!app.requestSingleInstanceLock()) {
       deliveryPoller = poller;
     });
 
+    // The P4 probe-relay: this desktop is the fleet's approval-discovery
+    // source (D4) — probe on a minutes-bounded cadence and relay NEW
+    // approvals to the service so phones get them as pushes. Same D6
+    // lifecycle: while-running, no daemon, dies with the app.
+    void startApprovalRelay({
+      probe: listPendingApprovals,
+      send: async (event) => {
+        const response = await fetch(`${DELIVERY_SERVICE_URL}/events`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(event),
+        });
+        if (!response.ok) {
+          throw new Error(`Delivery service rejected approval relay (${response.status}).`);
+        }
+      },
+      kv: kv(),
+      log: (message) => console.log(`[delivery-relay] ${message}`),
+      intervalMs: Number.parseInt(process.env.DELIVERY_RELAY_INTERVAL_MS ?? "300000", 10),
+    }).then((relay) => {
+      approvalRelay = relay;
+    });
+
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
     });
@@ -212,6 +237,7 @@ if (!app.requestSingleInstanceLock()) {
     if (quitting) return;
     quitting = true;
     deliveryPoller?.stop();
+    approvalRelay?.stop();
     const timeout = new Promise((resolve) => setTimeout(resolve, QUIT_TIMEOUT_MS));
     void Promise.race([disconnect(), timeout]).finally(() => app.exit(0));
   });

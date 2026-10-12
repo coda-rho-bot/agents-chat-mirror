@@ -318,7 +318,11 @@ export async function listPendingApprovals(): Promise<HomeProbedApproval[]> {
     const latest = conversations[0];
     if (!latest || turns.has(latest.id)) continue;
     try {
-      found.push(...(await probeConversation(sdk, latest.id)));
+      // Tag the owning agent: the P4 probe-relay attributes each approval
+      // to its agent for the service's ingestion contract.
+      for (const probed of await probeConversation(sdk, latest.id)) {
+        found.push({ ...probed, agentId: agent.id });
+      }
     } catch {
       failures += 1;
     }

@@ -121,6 +121,8 @@ export type ScheduleSummary = {
  */
 export type HomeProbedApproval = {
   conversationId: string;
+  /** Owning agent (probe-relay attribution; optional for shape compatibility). */
+  agentId?: string | null;
   request: ApprovalRequest;
   /** When the probe observed it (ms epoch). */
   receivedAt: number;
