@@ -6,6 +6,7 @@ import type {
   AppEvent,
   AttachmentView,
   AppSettings,
+  TestResult,
   ApprovalDecision,
   ApprovalRequest,
   ChatRow,
@@ -117,6 +118,9 @@ type AppState = {
   /** Internal: apply a profiles round trip to the store. */
   applyProfiles: (result: ProfilesResult) => void;
   loadProfiles: () => Promise<void>;
+  /** Run a connection test against a profile's stored credential; the row shows the verdict. */
+  testProfileConnection: (profileId: string) => Promise<TestResult>;
+  toggleProfilePin: (profileId: string) => Promise<void>;
   switchProfile: (profileId: string | null) => Promise<void>;
   saveProfile: (input: ProfileSave) => Promise<void>;
   deleteProfile: (profileId: string) => Promise<void>;
@@ -394,6 +398,17 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   // The main process reconnects on these; the renderer follows through
   // `connection` events (agents/conversations clear and reload on ready).
+  testProfileConnection: async (profileId) => {
+    const verdict = await api.testProfileConnection(profileId);
+    // Refresh so the row's status dot reflects the persisted verdict.
+    get().applyProfiles(await api.listProfiles());
+    return verdict;
+  },
+
+  toggleProfilePin: async (profileId) => {
+    get().applyProfiles(await api.toggleProfilePin(profileId));
+  },
+
   switchProfile: async (profileId) => {
     get().applyProfiles(await api.setActiveProfile(profileId));
   },

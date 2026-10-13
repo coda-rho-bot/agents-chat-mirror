@@ -31,6 +31,7 @@ const profile: ProfileSummary = {
   url: "https://api.letta.com",
   authMethod: "oauth",
   hasCredential: true,
+  pinned: false,
 };
 
 const agents: AgentSummary[] = [

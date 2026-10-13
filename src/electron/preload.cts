@@ -46,6 +46,8 @@ const METHODS = [
   "deleteProfile",
   "signOutProfile",
   "setActiveProfile",
+  "testProfileConnection",
+  "toggleProfilePin",
 ] as const satisfies readonly (keyof AppRequests)[];
 
 // Fails to compile if a request is added to AppRequests but not listed above.

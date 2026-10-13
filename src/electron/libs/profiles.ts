@@ -42,6 +42,10 @@ export interface Profile {
    * Existing conversations keep their own per-conversation choice.
    */
   computerSelector?: ComputerSelectorField;
+  /** Result of the last "Test connection" run (mirrors mobile). */
+  lastTest?: "ok" | "unauthorized" | "unreachable";
+  /** Pinned profiles sort to the top of the list (mirrors mobile). */
+  pinned?: boolean;
   createdAt: number;
 }
 
@@ -82,7 +86,7 @@ export async function listProfiles(): Promise<Profile[]> {
   }
 }
 
-async function writeProfiles(profiles: Profile[]): Promise<void> {
+export async function writeProfiles(profiles: Profile[]): Promise<void> {
   await kv().set(INDEX_KEY, JSON.stringify(profiles));
 }
 
@@ -334,6 +338,8 @@ export function profileState(): {
     authMethod: CloudAuthMethod | null;
     hasCredential: boolean;
     computerSelector?: ComputerSelectorField;
+    lastTest?: "ok" | "unauthorized" | "unreachable";
+    pinned: boolean;
   }>;
   activeProfileId: string | null;
 } {
@@ -348,6 +354,8 @@ export function profileState(): {
       authMethod: p.authMethod ?? null,
       hasCredential: current.hasCredential[p.id] ?? false,
       ...(p.computerSelector !== undefined ? { computerSelector: p.computerSelector } : {}),
+      ...(p.lastTest !== undefined ? { lastTest: p.lastTest } : {}),
+      pinned: p.pinned === true,
     })),
     activeProfileId: current.activeId,
   };

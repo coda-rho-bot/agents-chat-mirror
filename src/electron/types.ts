@@ -53,6 +53,10 @@ export type ProfileSummary = {
   hasCredential: boolean;
   /** Cloud only: the environment new conversations route to. */
   computerSelector?: ComputerSelectorField;
+  /** Result of the last "Test connection" run (mirrors mobile). */
+  lastTest?: "ok" | "unauthorized" | "unreachable";
+  /** Pinned profiles sort to the top of the list (mirrors mobile). */
+  pinned: boolean;
 };
 
 /**
@@ -188,6 +192,10 @@ export type ProfilesResult = {
   profiles: ProfileSummary[];
   activeProfileId: string | null;
 };
+
+export type TestResult =
+  | { ok: true; detail: string }
+  | { ok: false; reason: "unauthorized" | "unreachable" | "invalid_url"; detail: string };
 
 export type OAuthSignInResult =
   | ({ ok: true; profile: ProfileSummary } & ProfilesResult)
@@ -386,6 +394,10 @@ export type AppRequests = {
   saveProfile(input: ProfileSave): ProfilesResult;
   deleteProfile(profileId: string): ProfilesResult;
   signOutProfile(profileId: string): ProfilesResult;
+  /** Run a real connection test (cloud REST / remote WS) against a profile's stored credential. */
+  testProfileConnection(profileId: string): Promise<TestResult>;
+  /** Toggle a profile's pinned flag (pinned sorts first). */
+  toggleProfilePin(profileId: string): Promise<ProfilesResult>;
   /** null switches to the built-in local connection. */
   setActiveProfile(profileId: string | null): ProfilesResult;
   /** Sign in with Letta; targets an existing profile or creates a new one. */

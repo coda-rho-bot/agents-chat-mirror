@@ -64,18 +64,24 @@ function ProfileRow({
   profile,
   active,
   busy,
+  testing,
   onActivate,
   onEdit,
   onSignOut,
   onRemove,
+  onTest,
+  onTogglePin,
 }: {
   profile: ProfileSummary;
   active: boolean;
   busy: boolean;
+  testing: boolean;
   onActivate: () => void;
   onEdit: () => void;
   onSignOut: () => void;
   onRemove: () => void;
+  onTest: () => void;
+  onTogglePin: () => void;
 }) {
   return (
     <div
@@ -92,17 +98,38 @@ function ProfileRow({
       />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={onTogglePin}
+            disabled={busy}
+            aria-label={profile.pinned ? `Unpin ${profile.name}` : `Pin ${profile.name} to top`}
+            title={profile.pinned ? "Unpin" : "Pin to top"}
+            className="shrink-0 text-muted transition-colors hover:text-ink-800"
+          >
+            {profile.pinned ? "★" : "☆"}
+          </button>
           <span className="truncate text-sm font-medium text-ink-900">{profile.name}</span>
           <span className="rounded-full bg-surface-tertiary px-2 py-0.5 text-[10px] font-medium text-muted">
             {TYPE_LABELS[profile.type]}
             {profile.authMethod === "oauth" ? " · sign-in" : ""}
           </span>
+          {testing ? (
+            <Spinner className="h-3 w-3 shrink-0" />
+          ) : profile.lastTest ? (
+            <span
+              title={`Last test: ${profile.lastTest}`}
+              className={`h-2 w-2 shrink-0 rounded-full ${profile.lastTest === "ok" ? "bg-success" : "bg-error"}`}
+            />
+          ) : null}
         </div>
         <div className="truncate text-xs text-muted">
           {profile.url || "—"} · {credentialLabel(profile)}
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-2 text-xs">
+        <button type="button" className="underline" disabled={busy || testing} onClick={onTest}>
+          {testing ? "Testing…" : "Test"}
+        </button>
         <button type="button" className="underline" disabled={busy} onClick={onEdit}>
           Edit
         </button>
@@ -128,11 +155,15 @@ export function ProfilesPanel() {
   const deleteProfile = useAppStore((state) => state.deleteProfile);
   const signOutProfile = useAppStore((state) => state.signOutProfile);
   const oauthSignIn = useAppStore((state) => state.oauthSignIn);
+  const testProfileConnection = useAppStore((state) => state.testProfileConnection);
+  const toggleProfilePin = useAppStore((state) => state.toggleProfilePin);
   const reconnect = useAppStore((state) => state.reconnect);
 
   const [draft, setDraft] = useState<Draft | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [testingId, setTestingId] = useState<string | null>(null);
+  const [verdict, setVerdict] = useState<string | null>(null);
 
   const activeProfileId = settings?.activeProfileId ?? null;
   const editing = draft?.id ? profiles.find((item) => item.id === draft.id) : undefined;
@@ -219,12 +250,15 @@ export function ProfilesPanel() {
             that choice.
           </p>
         )}
-        {profiles.map((profile) => (
+        {[...profiles]
+          .sort((a, b) => Number(b.pinned) - Number(a.pinned))
+          .map((profile) => (
           <ProfileRow
             key={profile.id}
             profile={profile}
             active={activeProfileId === profile.id}
             busy={busy}
+            testing={testingId === profile.id}
             onActivate={() => void run(() => switchProfile(profile.id))}
             onEdit={() => {
               setError(null);
@@ -232,8 +266,25 @@ export function ProfilesPanel() {
             }}
             onSignOut={() => void run(() => signOutProfile(profile.id))}
             onRemove={() => remove(profile)}
+            onTest={() =>
+              void (async () => {
+                setTestingId(profile.id);
+                setVerdict(null);
+                setError(null);
+                try {
+                  const result = await testProfileConnection(profile.id);
+                  setVerdict(result.ok ? `${profile.name}: ${result.detail}` : `${profile.name}: ${result.detail}`);
+                } catch (failure) {
+                  setError(failure instanceof Error ? failure.message : String(failure));
+                } finally {
+                  setTestingId(null);
+                }
+              })()
+            }
+            onTogglePin={() => void run(() => toggleProfilePin(profile.id))}
           />
         ))}
+        {verdict && <p className="text-xs text-muted">{verdict}</p>}
       </fieldset>
 
       {draft ? (

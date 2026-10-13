@@ -47,9 +47,12 @@ import {
   saveProfile,
   setActiveProfileId,
   signOutProfile,
+  getProfileSecret,
+  writeProfiles,
   type Profile,
 } from "./libs/profiles.js";
 import { signInWithLetta } from "./libs/oauth.js";
+import { testConnection } from "./libs/testConnection.js";
 import { describeError } from "./libs/transcript.js";
 import { validateEventFrame } from "./util.js";
 
@@ -139,6 +142,36 @@ const handlers: Handlers = {
     const result = await profilesResult();
     void reconnect();
     return result;
+  },
+
+  testProfileConnection: async (profileId) => {
+    const profile = (await listProfiles()).find((item) => item.id === profileId);
+    if (!profile) throw new Error("That profile no longer exists.");
+    // OAuth credentials resolve (and refresh if needed) through the same
+    // single-flight path the connection uses; the test never stores anything.
+    const secret = (await getProfileSecret(profileId)) ?? "";
+    const verdict = await testConnection(profile.type, profile.url, secret);
+    // Persist the verdict on the profile — the row shows it as a status dot
+    // (mirrors mobile's lastTest).
+    const profiles = await listProfiles();
+    const index = profiles.findIndex((item) => item.id === profileId);
+    if (index !== -1) {
+      profiles[index] = {
+        ...profiles[index],
+        lastTest: verdict.ok ? "ok" : verdict.reason === "unauthorized" ? "unauthorized" : "unreachable",
+      };
+      await writeProfiles(profiles);
+    }
+    return verdict;
+  },
+
+  toggleProfilePin: async (profileId) => {
+    const profiles = await listProfiles();
+    const index = profiles.findIndex((item) => item.id === profileId);
+    if (index === -1) throw new Error("That profile no longer exists.");
+    profiles[index] = { ...profiles[index], pinned: !profiles[index].pinned };
+    await writeProfiles(profiles);
+    return profilesResult();
   },
   oauthSignIn: async (profileId) => {
     try {

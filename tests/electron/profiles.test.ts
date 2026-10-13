@@ -343,3 +343,26 @@ describe("sign out", () => {
     expect(await profiles.hasSecret(id)).toBe(true);
   });
 });
+
+
+describe("lastTest and pinned (mobile parity)", () => {
+  it("summary carries pinned as a boolean and lastTest when set", async () => {
+    await profiles.saveProfile(
+      { id: "p-x", type: "cloud", name: "Cloud", url: profiles.CLOUD_DEFAULT_URL, authMethod: "api_key", createdAt: Date.now() },
+      "sk-1",
+    );
+    await profiles.refreshProfiles();
+    const state = profiles.profileState();
+    expect(state.profiles[0].pinned).toBe(false);
+    expect(state.profiles[0].lastTest).toBeUndefined();
+
+    // Simulate what ipc.testProfileConnection does: write lastTest + pinned.
+    const list = await profiles.listProfiles();
+    list[0] = { ...list[0], lastTest: "ok", pinned: true };
+    await profiles.writeProfiles(list);
+    await profiles.refreshProfiles();
+    const updated = profiles.profileState().profiles[0];
+    expect(updated.lastTest).toBe("ok");
+    expect(updated.pinned).toBe(true);
+  });
+});

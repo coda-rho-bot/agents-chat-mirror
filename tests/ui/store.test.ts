@@ -40,6 +40,7 @@ const profile = (id: string, extra: Partial<ProfileSummary> = {}): ProfileSummar
   url: "https://api.letta.com",
   authMethod: "oauth",
   hasCredential: true,
+  pinned: false,
   ...extra,
 });
 
@@ -123,6 +124,8 @@ function createBridge() {
     deleteProfile: vi.fn(async () => profilesResult({ profiles: [], activeProfileId: null })),
     signOutProfile: vi.fn(async () => profilesResult()),
     setActiveProfile: vi.fn(async () => profilesResult()),
+    testProfileConnection: vi.fn(async () => ({ ok: true, detail: "Connected." })),
+    toggleProfilePin: vi.fn(async () => profilesResult()),
   } satisfies Record<keyof AppBridge, unknown>;
 }
 
