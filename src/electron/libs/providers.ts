@@ -40,7 +40,16 @@ type ProvidersReply = { type: string; providers: WireProvider[] };
 
 type ModelsReply = {
   type: string;
-  entries: Array<{ id: string; handle: string; label?: string }>;
+  entries: Array<{
+    id: string;
+    handle: string;
+    label?: string;
+    reasoning_capabilities?: {
+      supported_efforts?: string[] | null;
+      default_effort?: string | null;
+      mandatory?: boolean | null;
+    } | null;
+  }>;
   available_handles?: string[] | null;
 };
 
@@ -121,7 +130,47 @@ export async function disconnectProvider(input: {
 export async function listModels(refresh = false): Promise<ModelOption[]> {
   const reply = await request<ModelsReply>("list_models", { force: refresh });
   const available = reply.available_handles ? new Set(reply.available_handles) : null;
-  return reply.entries
-    .filter((entry) => !available || available.has(entry.handle))
-    .map((entry) => ({ id: entry.id, handle: entry.handle, label: entry.label || entry.handle }));
+  // The catalog can list the same handle multiple times (per region/variant
+  // entries); duplicates would flood the picker's capped result window.
+  const seen = new Set<string>();
+  const models = reply.entries
+    .filter((entry) => (!available || available.has(entry.handle)) && !seen.has(entry.handle) && seen.add(entry.handle))
+    .map((entry) => ({
+      id: entry.id,
+      handle: entry.handle,
+      label: entry.label || entry.handle,
+      efforts: entry.reasoning_capabilities?.supported_efforts ?? null,
+      defaultEffort: entry.reasoning_capabilities?.default_effort ?? null,
+      reasoningMandatory: entry.reasoning_capabilities?.mandatory ?? null,
+    }));
+  return await configuredFirst(models);
+}
+
+/**
+ * Bundled catalogs can list hundreds of models for providers the user never
+ * set up (ambient credentials make them "available"), while a connected
+ * provider's models land at the tail. Sorting connected providers first keeps
+ * the models the user actually configured inside the picker's visible window.
+ */
+async function configuredFirst(models: ModelOption[]): Promise<ModelOption[]> {
+  const configured = await configuredProviderNames();
+  if (configured.size === 0) return models;
+  const from = (model: ModelOption) => configured.has(model.handle.split("/")[0] ?? "");
+  return [...models.filter(from), ...models.filter((model) => !from(model))];
+}
+
+async function configuredProviderNames(): Promise<Set<string>> {
+  try {
+    const reply = await request<ProvidersReply>("list_connect_providers", { target: "local" });
+    const names = new Set<string>();
+    for (const provider of reply.providers ?? []) {
+      for (const connection of provider.connected_providers ?? []) {
+        if (connection.is_connected) names.add(connection.provider_name ?? provider.provider_name);
+      }
+    }
+    return names;
+  } catch {
+    // Without the provider list (e.g. a remote backend), keep the runtime's order.
+    return new Set();
+  }
 }

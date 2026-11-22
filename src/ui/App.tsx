@@ -1,11 +1,13 @@
 import { useEffect } from "react";
 import { AgentSettingsDialog } from "./components/AgentSettingsDialog";
+import { AuthBanner } from "./components/AuthBanner";
 import { ChatView } from "./components/ChatView";
-import { HomeView } from "./components/HomeView";
 import { MemoryView } from "./components/MemoryView";
+import { SchedulesView } from "./components/SchedulesView";
 import { NewAgentDialog } from "./components/NewAgentDialog";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { Sidebar } from "./components/Sidebar";
+import { AgentRail } from "./components/AgentRail";
 import { CloseIcon } from "./components/icons";
 import { useAppStore } from "./store";
 
@@ -57,17 +59,13 @@ export default function App() {
 
   return (
     <div className="flex h-screen overflow-hidden bg-surface text-ink-900">
+      <AgentRail />
       <Sidebar />
-      {view === "home" ? (
-        <HomeView />
-      ) : view === "memory" ? (
-        <MemoryView key={agentId} />
-      ) : (
-        <ChatView />
-      )}
+      {view === "memory" ? <MemoryView key={agentId} /> : view === "schedules" ? <SchedulesView key={agentId} /> : <ChatView />}
       <SettingsDialog />
       <NewAgentDialog />
       <AgentSettingsDialog />
+      <AuthBanner />
       <Notice />
     </div>
   );

@@ -1,86 +1,85 @@
-import {
-  loadConversationEnv as coreLoad,
-  saveConversationEnv as coreSave,
-  type ComputerSelectorField,
-  type ConversationEnv,
-} from "@angus/letta-client-core";
-import type { ComputerSelector, LettaAgentClient } from "@letta-ai/letta-agent-sdk";
-import { toComputerSummary } from "@angus/letta-client-core";
-import { activeProfile, kv, saveProfile } from "./profiles.js";
-import type { ComputerSummary } from "../types.js";
+import { LettaAgentClient, type ComputerSelector } from "@letta-ai/letta-agent-sdk";
+import { getConnectionConfig, load, save, type StoredSettings } from "./settings.js";
 
 /**
- * Per-conversation environment (computer) selection — desktop adapter over
- * the core module (@angus/letta-client-core env/conversationEnv), the same
- * adapter-threading the Android app uses (coda/agents-chat
- * src/lib/conversationEnv.ts over AsyncStorage). The logic — key scheme
- * (`letta.env.<id>`), sandbox/JSON/inherit semantics, the isSelector shape
- * guard — lives in the core; this file only supplies the desktop's
- * KeyValueStore (the profiles.json metadata store, single-store parity with
- * Android) and the Cloud computers listing. PROVENANCE: the ComputerSummary
- * projection and the account-default write are adapted from the Android
- * lineage (agents-chat src/lib/letta/api.ts listComputers, chat.tsx
- * selectEnvironment's asDefault branch) — extraction candidates for a later
- * core tier, same discipline as the attachments constants.
+ * Per-conversation execution environment (computer) selection.
+ *
+ * The choice is stored in the settings file under `conversationEnvs`:
+ *   - absent  → no explicit choice; the session runs wherever the account/
+ *              SDK decides (SDK-managed sandbox for cloud conversations)
+ *   - null    → explicit Cloud Sandbox
+ *   - object  → a computer selector ({ deviceId } preferred; stable across
+ *              connection rotations)
+ *
+ * Per-turn sessions mean a pick made mid-run applies to the NEXT send.
  */
 
-/** The environment choice for one conversation. */
-export async function getConversationEnv(
+export type ComputerSelectorField = ComputerSelector;
+
+export type ConversationEnv = { selector: ComputerSelectorField | null | undefined };
+
+export type ComputerSummary = {
+  id: string;
+  deviceId: string;
+  name: string;
+  status: "online" | "offline";
+  lastSeenAt: number;
+};
+
+let cloudComputersClient: LettaAgentClient | null = null;
+
+/** List computers registered with this Letta Cloud account.
+ *
+ * The app's main client routes cloud sessions through a local app-server
+ * (backend: "local" with harnessBackend: "api"), and the SDK's computers
+ * client exists only on a direct cloud client — so this builds one
+ * dedicated listing client from the saved cloud credentials. */
+export async function listComputers(): Promise<ComputerSummary[]> {
+  const config = getConnectionConfig();
+  if (config.backend !== "cloud") {
+    throw new Error("Computers are only available with the Letta Cloud backend.");
+  }
+  cloudComputersClient ??= new LettaAgentClient({
+    backend: "cloud",
+    ...(config.apiKey ? { apiKey: config.apiKey } : {}),
+    ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
+  });
+  const result = await cloudComputersClient.computers.list({ limit: 50 });
+  return result.computers.map((computer) => ({
+    id: computer.id,
+    deviceId: computer.deviceId,
+    name: computer.name,
+    status: computer.status,
+    lastSeenAt: computer.lastSeenAt,
+  }));
+}
+
+export function getAllConversationEnvs(): Record<string, ComputerSelectorField | null> {
+  return { ...(load().conversationEnvs ?? {}) };
+}
+
+export function getConversationEnv(conversationId: string): ConversationEnv {
+  const selector = load().conversationEnvs?.[conversationId];
+  return selector === undefined ? { selector: undefined } : { selector: selector ?? null };
+}
+
+export function setConversationEnv(
   conversationId: string,
-): Promise<ConversationEnv> {
-  return coreLoad(kv(), conversationId);
+  selector: ComputerSelectorField | null | undefined,
+): ConversationEnv {
+  const stored = load();
+  const map = { ...(stored.conversationEnvs ?? {}) };
+  // undefined = inherit; null = explicit sandbox; object = a computer.
+  if (selector === undefined) delete map[conversationId];
+  else map[conversationId] = selector;
+  save({ ...stored, conversationEnvs: map } as StoredSettings);
+  return { selector: map[conversationId] ?? null };
 }
 
-/** Persist an explicit choice: null = Cloud Sandbox, selector = a computer. */
-export async function setConversationEnv(
-  conversationId: string,
-  selector: ComputerSelectorField | null,
-): Promise<ConversationEnv> {
-  await coreSave(kv(), conversationId, selector);
-  return { selector };
-}
-
-/** Display projection of the SDK's Computer record — the core's, re-exported
- *  at the existing site (tier 3 extraction; see PROVENANCE.md there). */
-export { toComputerSummary };
-
-/**
- * List computers registered with this Letta Cloud account. Cloud only —
- * the SDK's `client.computers` throws on any other backend, which callers
- * surface as an error state rather than an empty list.
- */
-export async function listComputers(client: LettaAgentClient): Promise<ComputerSummary[]> {
-  const result = await client.computers.list({ limit: 50 });
-  return result.computers.map(toComputerSummary);
-}
-
-/**
- * The account-level default for NEW conversations (the sheet's "use for
- * new conversations" checkbox). null clears it — a cleared default means
- * the SDK-managed sandbox, matching the Android write
- * (`computerSelector: selector ?? undefined`). Existing conversations keep
- * their own per-conversation choice regardless.
- */
-export async function setProfileEnvDefault(
-  selector: ComputerSelectorField | null,
-): Promise<void> {
-  const profile = activeProfile();
-  if (!profile) return;
-  await saveProfile({ ...profile, computerSelector: selector ?? undefined }, null);
-}
-
-/**
- * The `computer` option a new session carries: the conversation's explicit
- * choice first (null = Cloud Sandbox), then the account default; no choice
- * at all means the SDK provisions its managed sandbox. The SDK resolves a
- * deviceId selector to the device's CURRENT connection lease at attach time
- * and fails loudly when the device is offline (resolveExplicitConnection is
- * the only branch — a set selector can never fall back to a sandbox).
- */
+/** The session option: undefined leaves the SDK's default (managed sandbox). */
 export function sessionComputerOption(
-  conv: ConversationEnv,
-  profileDefault?: ComputerSelectorField,
+  conversationId: string,
 ): ComputerSelector | undefined {
-  const effective = conv.selector === undefined ? profileDefault : conv.selector;
-  return effective === null || effective === undefined ? undefined : effective;
+  const env = getConversationEnv(conversationId);
+  return env.selector === null || env.selector === undefined ? undefined : env.selector;
 }

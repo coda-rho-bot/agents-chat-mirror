@@ -100,13 +100,13 @@ describe("disconnectProvider", () => {
 
 describe("listModels", () => {
   const entries = [
-    { id: "a", handle: "p/a", label: "Model A" },
-    { id: "b", handle: "p/b" },
+    { id: "a", handle: "p/a", label: "Model A", efforts: null, defaultEffort: null, reasoningMandatory: null },
+    { id: "b", handle: "p/b", label: "p/b", efforts: null, defaultEffort: null, reasoningMandatory: null },
   ];
 
   it("lists only the models the user can run", async () => {
     request.mockResolvedValue({ entries, available_handles: ["p/b"] });
-    expect(await providers.listModels()).toEqual([{ id: "b", handle: "p/b", label: "p/b" }]);
+    expect(await providers.listModels()).toEqual([{ id: "b", handle: "p/b", label: "p/b", efforts: null, defaultEffort: null, reasoningMandatory: null }]);
     expect(request).toHaveBeenCalledWith("list_models", { force: false });
   });
 
@@ -114,5 +114,36 @@ describe("listModels", () => {
     request.mockResolvedValue({ entries, available_handles: null });
     expect(await providers.listModels(true)).toHaveLength(2);
     expect(request).toHaveBeenCalledWith("list_models", { force: true });
+  });
+
+  it("lists connected providers' models before catalog entries", async () => {
+    request.mockImplementation((...args: unknown[]) => {
+      const body = (args[1] ?? {}) as Record<string, unknown>;
+      if (body.target === "local") {
+        return Promise.resolve({
+          providers: [
+            {
+              id: "openai-compatible",
+              display_name: "OpenAI compatible",
+              description: "",
+              provider_name: "openai-compatible",
+              connected_providers: [{ is_connected: true, provider_name: "openai-compatible" }],
+            },
+          ],
+        });
+      }
+      return Promise.resolve({
+        entries: [
+          { id: "b1", handle: "amazon-bedrock/b1", label: "B1", efforts: null, defaultEffort: null, reasoningMandatory: null },
+          { id: "g1", handle: "openai-compatible/glm", label: "glm", efforts: null, defaultEffort: null, reasoningMandatory: null },
+        ],
+        available_handles: null,
+      });
+    });
+    const models = await providers.listModels();
+    expect(models.map((model) => model.handle)).toEqual([
+      "openai-compatible/glm",
+      "amazon-bedrock/b1",
+    ]);
   });
 });

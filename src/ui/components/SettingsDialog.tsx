@@ -1,17 +1,379 @@
+import { useEffect, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useAppStore, type SettingsTab } from "../store";
-import { ProfilesPanel } from "./ProfilesPanel";
+import type { AppSettings, BackendKind, SavedConnection, SettingsUpdate } from "../types";
 import { ProvidersPanel } from "./ProvidersPanel";
-import { CloseIcon } from "./icons";
+
+import { CloseIcon, Spinner } from "./icons";
 
 const TABS: Array<{ id: SettingsTab; label: string }> = [
-  { id: "connection", label: "Profiles" },
+  { id: "connection", label: "Connection" },
   { id: "providers", label: "Model providers" },
 ];
+
+const api = window.bridge;
+
+const BACKENDS: Array<{ kind: BackendKind; label: string; detail: string }> = [
+  {
+    kind: "local",
+    label: "This computer",
+    detail: "Agents and their memory are stored on this machine. No account needed.",
+  },
+  {
+    kind: "cloud",
+    label: "Letta Cloud",
+    detail: "Agents are stored in Letta Cloud. Tools still run on this machine.",
+  },
+  {
+    kind: "remote",
+    label: "Self-hosted server",
+    detail: "Connect to a Letta app server you run yourself.",
+  },
+];
+
+function Field({
+  label,
+  hint,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className="grid gap-1.5">
+      <span className="text-xs font-medium text-ink-700">{label}</span>
+      {children}
+      {hint && <span className="text-xs text-muted">{hint}</span>}
+    </label>
+  );
+}
+
+function SettingsForm({ settings, onClose }: { settings: AppSettings; onClose: () => void }) {
+  const connection = useAppStore((state) => state.connection);
+  const saveSettings = useAppStore((state) => state.saveSettings);
+  const reconnect = useAppStore((state) => state.reconnect);
+
+  const [backend, setBackend] = useState(settings.backend);
+  const [mode, setMode] = useState<"local" | "remote-env" | "cloud-only">("local");
+  const [remoteEnv, setRemoteEnv] = useState<{ running: boolean } | null>(null);
+  const [envName, setEnvName] = useState("");
+
+
+  useEffect(() => {
+    void window.bridge.getRemoteEnvName().then(setEnvName);
+  }, [open]);
+
+  useEffect(() => {
+    void window.bridge.getExecutionMode().then((m) => setMode(m));
+    void window.bridge.getRemoteEnvStatus().then(setRemoteEnv);
+  }, [open]);
+  const [apiKey, setApiKey] = useState("");
+  const [apiBaseUrl, setApiBaseUrl] = useState(settings.apiBaseUrl);
+  const [serverUrl, setServerUrl] = useState(settings.serverUrl);
+  const [serverToken, setServerToken] = useState("");
+  const [savedConnections, setSavedConnections] = useState<SavedConnection[]>([]);
+  const [saveName, setSaveName] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const save = async () => {
+    setSaving(true);
+    setError(null);
+    const update: SettingsUpdate = { backend };
+    if (backend === "cloud") {
+      update.apiBaseUrl = apiBaseUrl;
+      // An empty field keeps the saved key.
+      if (apiKey.trim()) update.apiKey = apiKey;
+    }
+    if (backend === "remote") {
+      update.serverUrl = serverUrl;
+      if (serverToken.trim()) update.serverToken = serverToken;
+    }
+    try {
+      const savedMode = await window.bridge.getExecutionMode();
+      if (mode !== savedMode) await window.bridge.setExecutionMode(mode);
+      const savedName = await window.bridge.getRemoteEnvName();
+      if (envName.trim() !== savedName) {
+        const applied = await window.bridge.setRemoteEnvName({ name: envName.trim() });
+        setEnvName(applied);
+      }
+      await saveSettings(update);
+      setApiKey("");
+      setServerToken("");
+      onClose();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : String(failure));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const canSave = backend !== "remote" || serverUrl.trim().length > 0;
+
+  useEffect(() => {
+    void api.listSavedConnections().then(setSavedConnections);
+  }, [open]);
+
+  const persistConnection = async (name: string) => {
+    setSavedConnections(await api.saveCurrentConnection(name));
+    setSaveName("");
+  };
+
+  return (
+    <form
+      className="mt-4 grid gap-5"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (canSave) void save();
+      }}
+    >
+      <fieldset className="grid gap-2">
+        <legend className="mb-2 text-xs font-medium text-ink-700">What the app runs locally</legend>
+        {([
+          {
+            id: "local",
+            label: "Private server (this app)",
+            detail: "The app runs its own agent server on this computer. Full local file access. Server stops when the app closes.",
+          },
+          {
+            id: "remote-env",
+            label: "App starts a Letta remote",
+            detail: remoteEnv?.running
+              ? "Running — the app started a remote registration for this computer; it stops when the app stops or the setting changes."
+              : "Every time the app starts, it registers this computer as a Letta remote (letta server, no local port). Stops when the app stops or the setting changes.",
+          },
+          {
+            id: "cloud-only",
+            label: "Neither — connect only",
+            detail: "The app runs nothing locally. Sessions execute in the cloud sandbox or on any Letta remote you have running (picked per conversation) — never this machine's files.",
+          },
+        ] as const).map((option) => (
+          <label
+            key={option.id}
+            className={`flex cursor-pointer gap-3 rounded-xl border px-3.5 py-3 transition-colors ${mode === option.id ? "border-accent bg-accent-subtle" : "border-border hover:bg-surface-tertiary"}`}
+          >
+            <input
+              type="radio"
+              name="executionMode"
+              className="mt-1 accent-[var(--color-accent)]"
+              checked={mode === option.id}
+              onChange={() => setMode(option.id)}
+            />
+            <span>
+              <span className="block text-sm font-medium text-ink-900">{option.label}</span>
+              <span className="block text-xs text-muted">{option.detail}</span>
+            </span>
+          </label>
+        ))}
+      </fieldset>
+
+      {mode === "remote-env" && (
+        <div className="grid gap-2">
+          <div className="text-xs font-medium text-ink-700">Remote name</div>
+          <div className="flex gap-2">
+            <input
+              value={envName}
+              onChange={(event) => setEnvName(event.target.value)}
+              placeholder="defaults to oss-ui@<hostname>"
+              className="field font-mono"
+            />
+            <span className="self-center text-xs text-muted">applied when you Save</span>
+          </div>
+          <p className="text-xs text-muted">
+            The name this computer registers under. Saving applies it and restarts the
+            registration; other clients pick it from their environment picker.
+          </p>
+        </div>
+      )}
+
+      <fieldset className="grid gap-2">
+        <legend className="mb-2 text-xs font-medium text-ink-700">Where your agents live</legend>
+        {BACKENDS.map((option) => (
+          <label
+            key={option.kind}
+            className={`flex cursor-pointer gap-3 rounded-xl border px-3.5 py-3 transition-colors ${backend === option.kind ? "border-accent bg-accent-subtle" : "border-border hover:bg-surface-tertiary"}`}
+          >
+            <input
+              type="radio"
+              name="backend"
+              className="mt-1 accent-[var(--color-accent)]"
+              checked={backend === option.kind}
+              onChange={() => setBackend(option.kind)}
+            />
+            <span>
+              <span className="block text-sm font-medium text-ink-900">{option.label}</span>
+              <span className="block text-xs text-muted">{option.detail}</span>
+            </span>
+          </label>
+        ))}
+      </fieldset>
+
+      {savedConnections.length > 0 && (
+        <fieldset className="grid gap-2">
+          <legend className="mb-1 text-xs font-medium text-ink-700">Saved connections</legend>
+          {savedConnections.map((connection) => (
+            <div
+              key={connection.id}
+              className="flex items-center gap-3 rounded-xl border border-border px-3.5 py-2.5"
+            >
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-medium text-ink-900">
+                  {connection.name}
+                </span>
+                <span className="block truncate font-mono text-[11px] text-muted">
+                  {connection.backend === "remote" && (connection.serverUrl ?? "remote")}
+                  {connection.backend === "cloud" && (connection.apiBaseUrl || "api.letta.com")}
+                  {connection.backend === "local" && "this computer"}
+                </span>
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  void api.switchSavedConnection({ id: connection.id });
+                  // The main process reconnects; the store picks up the new
+                  // connection state through `connection` events.
+                  window.location.reload();
+                }}
+                className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-ink-900 hover:bg-surface-tertiary"
+              >
+                Switch
+              </button>
+              <button
+                type="button"
+                onClick={() => void api.deleteSavedConnection({ id: connection.id }).then(setSavedConnections)}
+                className="rounded-lg px-2 py-1.5 text-xs font-medium text-muted hover:text-ink-900"
+                aria-label={`Delete ${connection.name}`}
+              >
+                <CloseIcon className="h-4 w-4" />
+              </button>
+            </div>
+          ))}
+        </fieldset>
+      )}
+
+      <div className="grid gap-2">
+        <div className="text-xs font-medium text-ink-700">Save current connection as…</div>
+        <div className="flex gap-2">
+          <input
+            value={saveName}
+            onChange={(event) => setSaveName(event.target.value)}
+            placeholder="e.g. Work laptop, Homelab server"
+            className="field"
+          />
+          <button
+            type="button"
+            disabled={saveName.trim().length === 0}
+            onClick={() => void persistConnection(saveName)}
+            className="rounded-lg border border-border px-3 py-1.5 text-sm font-medium text-ink-900 disabled:opacity-50 hover:bg-surface-tertiary"
+          >
+            Save
+          </button>
+        </div>
+        <p className="text-xs text-muted">
+          Snapshots the backend, URL, and credentials above under a name you pick. Switching
+          applies the snapshot and reconnects.
+        </p>
+      </div>
+
+      {backend === "cloud" && (
+        <div className="grid gap-3">
+          <Field
+            label="API key"
+            hint={
+              settings.hasApiKey
+                ? "A key is saved. Enter a new one to replace it."
+                : "Create one at app.letta.com/settings. Leave empty if you ran `letta login`."
+            }
+          >
+            <input
+              type="password"
+              autoComplete="off"
+              value={apiKey}
+              onChange={(event) => setApiKey(event.target.value)}
+              placeholder={settings.hasApiKey ? "Saved" : "sk-let-..."}
+              className="field font-mono"
+            />
+          </Field>
+          <Field label="API base URL" hint="Optional. Leave empty for api.letta.com.">
+            <input
+              value={apiBaseUrl}
+              onChange={(event) => setApiBaseUrl(event.target.value)}
+              placeholder="https://api.letta.com"
+              className="field font-mono"
+            />
+          </Field>
+        </div>
+      )}
+
+      {backend === "remote" && (
+        <div className="grid gap-3">
+          <Field
+            label="Server URL"
+            hint="Start one with: letta server --backend local --listen ws://127.0.0.1:4500"
+          >
+            <input
+              value={serverUrl}
+              onChange={(event) => setServerUrl(event.target.value)}
+              placeholder="ws://127.0.0.1:4500"
+              className="field font-mono"
+            />
+          </Field>
+          <Field
+            label="Access token"
+            hint={
+              settings.hasServerToken
+                ? "A token is saved. Enter a new one to replace it."
+                : "Only needed if the server was started with --ws-auth."
+            }
+          >
+            <input
+              type="password"
+              autoComplete="off"
+              value={serverToken}
+              onChange={(event) => setServerToken(event.target.value)}
+              placeholder={settings.hasServerToken ? "Saved" : "Optional"}
+              className="field font-mono"
+            />
+          </Field>
+        </div>
+      )}
+
+      <div className="flex items-center gap-3 border-t border-border pt-4">
+        <div className="min-w-0 flex-1 text-xs" role="status">
+          {error ? (
+            <span className="text-error">{error}</span>
+          ) : !connection || connection.status === "connecting" ? (
+            <span className="flex items-center gap-2 text-muted">
+              <Spinner className="h-3 w-3" />
+              Connecting
+            </span>
+          ) : connection.status === "ready" ? (
+            <span className="text-success">Connected to {connection.detail}</span>
+          ) : (
+            <span className="flex items-start gap-2 text-error">
+              <span className="min-w-0 break-words">{connection.error}</span>
+              <button type="button" className="shrink-0 underline" onClick={reconnect}>
+                Retry
+              </button>
+            </span>
+          )}
+        </div>
+        <button type="button" className="button-secondary" onClick={onClose}>
+          Discard
+        </button>
+        <button type="submit" className="button-primary" disabled={!canSave || saving}>
+          Save
+        </button>
+      </div>
+    </form>
+  );
+}
 
 export function SettingsDialog() {
   const open = useAppStore((state) => state.settingsOpen);
   const tab = useAppStore((state) => state.settingsTab);
+  const settings = useAppStore((state) => state.settings);
   const setSettingsOpen = useAppStore((state) => state.setSettingsOpen);
   const openSettings = useAppStore((state) => state.openSettings);
 
@@ -46,9 +408,12 @@ export function SettingsDialog() {
               </button>
             ))}
           </div>
-          {/* Mounted per open so the pane always starts from the saved state. */}
-          {open && tab === "connection" && <ProfilesPanel />}
+          {/* Mounted per open so the form always starts from the saved settings. */}
+          {open && tab === "connection" && settings && (
+            <SettingsForm settings={settings} onClose={() => setSettingsOpen(false)} />
+          )}
           {open && tab === "providers" && <ProvidersPanel />}
+
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

@@ -3,14 +3,9 @@ import type {
   AgentSummary,
   AppBridge,
   AppSettings,
-  AttachmentView,
   ChatRow,
-  ComputerSelectorField,
-  ComputerSummary,
-  ConversationEnv,
   ConversationSummary,
-  ProfileSummary,
-  ProfilesResult,
+  ModelOption,
 } from "../../src/ui/types";
 
 type Store = typeof import("../../src/ui/store");
@@ -21,9 +16,8 @@ const settings: AppSettings = {
   apiBaseUrl: "",
   hasApiKey: false,
   hasServerToken: false,
-  activeProfileId: null,
   permissionMode: "standard",
-  agentId: "agent-2",
+  agentId: "agent-2", lastConversationByAgent: {},
   recentCwds: ["/recent"],
   defaultCwd: "/home",
 };
@@ -32,29 +26,6 @@ const agents: AgentSummary[] = [
   { id: "agent-1", name: "One", description: null, model: "provider/one" },
   { id: "agent-2", name: "Two", description: null, model: "provider/two" },
 ];
-
-const profile = (id: string, extra: Partial<ProfileSummary> = {}): ProfileSummary => ({
-  id,
-  name: `Profile ${id}`,
-  type: "cloud",
-  url: "https://api.letta.com",
-  authMethod: "oauth",
-  hasCredential: true,
-  pinned: false,
-  ...extra,
-});
-
-const profilesResult = (extra: Partial<ProfilesResult> = {}): ProfilesResult => {
-  const merged: ProfilesResult = {
-    settings,
-    profiles: [profile("p-1")],
-    activeProfileId: "p-1",
-    ...extra,
-  };
-  // The settings snapshot and the active id must agree.
-  if (!extra.settings) merged.settings = { ...settings, activeProfileId: merged.activeProfileId };
-  return merged;
-};
 
 const conversation = (id: string, extra: Partial<ConversationSummary> = {}): ConversationSummary => ({
   id,
@@ -75,19 +46,14 @@ function createBridge() {
     onEvent: vi.fn(() => () => undefined),
     getSettings: vi.fn(async () => settings),
     updateSettings: vi.fn(async () => settings),
-    getConnection: vi.fn(async () => ({ status: "connecting", backend: "local" })),
+    getConnection: vi.fn(),
     reconnect: vi.fn(),
     listAgents: vi.fn(async () => agents),
-    listSchedules: vi.fn(async () => []),
-    listPendingApprovals: vi.fn(async () => []),
-    listCompletedSinceLastLook: vi.fn(async () => []),
-    listProblems: vi.fn(async () => []),
-    markConversationRead: vi.fn(async () => undefined),
     createAgent: vi.fn(),
     getAgent: vi.fn(),
     updateAgent: vi.fn(),
     deleteAgent: vi.fn(async () => undefined),
-    listModels: vi.fn(async () => []),
+    listModels: vi.fn(async (): Promise<ModelOption[]> => []),
     listProviders: vi.fn(async () => []),
     connectProvider: vi.fn(),
     disconnectProvider: vi.fn(),
@@ -105,27 +71,49 @@ function createBridge() {
     stopTurn: vi.fn(),
     respondApproval: vi.fn(),
     selectDirectory: vi.fn(),
-    selectImages: vi.fn(
-      async (): Promise<{ attachments: AttachmentView[]; skipped: string[] }> => ({
-        attachments: [],
-        skipped: [],
-      }),
-    ),
-    oauthSignIn: vi.fn(),
-    listComputers: vi.fn(async () => [] as ComputerSummary[]),
-    getConversationEnv: vi.fn(async (): Promise<ConversationEnv> => ({ selector: undefined })),
-    setConversationEnv: vi.fn(async (_id: string, selector: ComputerSelectorField | null) => ({
-      selector,
-    })),
-    setProfileEnvDefault: vi.fn(async () => profilesResult()),
-    removeQueuedMessage: vi.fn(),
-    listProfiles: vi.fn(async () => profilesResult()),
-    saveProfile: vi.fn(async () => profilesResult()),
-    deleteProfile: vi.fn(async () => profilesResult({ profiles: [], activeProfileId: null })),
-    signOutProfile: vi.fn(async () => profilesResult()),
-    setActiveProfile: vi.fn(async () => profilesResult()),
-    testProfileConnection: vi.fn(async () => ({ ok: true, detail: "Connected." })),
-    toggleProfilePin: vi.fn(async () => profilesResult()),
+    getExecutionMode: vi.fn(),
+    listComputers: vi.fn(),
+    getConversationEnv: vi.fn(),
+    setConversationEnv: vi.fn(),
+    setExecutionMode: vi.fn(),
+    getRemoteEnvStatus: vi.fn(),
+    getRemoteEnvName: vi.fn(),
+    setRemoteEnvName: vi.fn(),
+    listRemoteDirectory: vi.fn(),
+    clearBrowseCache: vi.fn(),
+    getConversationCwd: vi.fn(),
+    getDefaultDirectory: vi.fn(),
+    getTargetFolder: vi.fn(),
+    setTargetFolder: vi.fn(),
+    listSavedConnections: vi.fn(),
+    saveCurrentConnection: vi.fn(),
+    switchSavedConnection: vi.fn(),
+    deleteSavedConnection: vi.fn(),
+    getRemoteAdoption: vi.fn().mockResolvedValue({ kind: "none" }),
+    getRemoteHandover: vi.fn().mockResolvedValue({ phase: "stable" }),
+    adoptRemoteEnv: vi.fn(),
+    getRemoteAuth: vi.fn(),
+    openRemoteAuthUrl: vi.fn(),
+    getPinnedConversations: vi.fn().mockResolvedValue([]),
+    togglePinnedConversation: vi.fn().mockResolvedValue([]),
+    selectImages: vi.fn().mockResolvedValue({ attachments: [], skipped: [] }),
+    getReadCursors: vi.fn().mockResolvedValue({}),
+    markConversationRead: vi.fn().mockResolvedValue({}),
+    getOsNotifications: vi.fn().mockResolvedValue(true),
+    setOsNotifications: vi.fn().mockResolvedValue(true),
+    markAllConversationsRead: vi.fn().mockResolvedValue({}),
+    listSchedules: vi.fn().mockResolvedValue([]),
+    pauseSchedule: vi.fn().mockResolvedValue(undefined),
+    resumeSchedule: vi.fn().mockResolvedValue(undefined),
+    deleteSchedule: vi.fn().mockResolvedValue(undefined),
+    triggerSchedule: vi.fn().mockResolvedValue(undefined),
+    getAllConversationEnvs: vi.fn().mockResolvedValue({}),
+    getAgentLayout: vi.fn().mockResolvedValue({ order: [], pinned: [] }),
+    setAgentLayout: vi.fn().mockResolvedValue({ order: [], pinned: [] }),
+    listConversationsFirstPage: vi.fn().mockResolvedValue([]),
+    agentRailStatus: vi.fn().mockResolvedValue({ agentId: "", latestAt: null, latestConversationId: null }),
+    schedulesByConversation: vi.fn().mockResolvedValue({}),
+    listMonitors: vi.fn().mockResolvedValue([]),
   } satisfies Record<keyof AppBridge, unknown>;
 }
 
@@ -194,6 +182,28 @@ describe("connection", () => {
   });
 });
 
+describe("models", () => {
+  beforeEach(connect);
+
+  it("refreshes on demand and keeps the previous list when the backend is down", async () => {
+    const model: ModelOption = { id: "m1", handle: "provider/one", label: "One", efforts: null, defaultEffort: null, reasoningMandatory: null };
+    bridge.listModels.mockResolvedValue([model]);
+    await state().refreshModels();
+    expect(state().models).toEqual([model]);
+
+    bridge.listModels.mockRejectedValue(new Error("provider down"));
+    await state().refreshModels();
+    expect(state().models).toEqual([model]);
+  });
+
+  it("passes the force flag through to the backend", async () => {
+    await state().refreshModels(true);
+    expect(bridge.listModels).toHaveBeenCalledWith(true);
+    await state().refreshModels();
+    expect(bridge.listModels).toHaveBeenLastCalledWith(false);
+  });
+});
+
 describe("turn events", () => {
   it("builds a chat from streamed rows", () => {
     const { handleEvent } = state();
@@ -243,67 +253,6 @@ describe("turn events", () => {
 
     handleEvent({ type: "approval.resolved", conversationId: "c", requestId: "r1" });
     expect(state().chats.c?.approvals).toEqual([]);
-  });
-
-  it("stamps approvals with the time this client learned of them", () => {
-    const { handleEvent } = state();
-    handleEvent({
-      type: "approval.requested",
-      conversationId: "c",
-      request: { requestId: "r1", toolCallId: null, toolName: "Bash", input: {}, suggestions: [] },
-    });
-    const approvals = state().chats.c?.approvals ?? [];
-    expect(approvals).toHaveLength(1);
-    expect(typeof approvals[0]?.receivedAt).toBe("number");
-  });
-
-  it("clears approvals when the runtime moves past them (resolved elsewhere)", () => {
-    const { handleEvent } = state();
-    handleEvent({
-      type: "approval.requested",
-      conversationId: "c",
-      request: { requestId: "r1", toolCallId: null, toolName: "Bash", input: {}, suggestions: [] },
-    });
-    // Mid-generation phases must NOT clear — a queued approval can still be pending.
-    handleEvent({ type: "turn.activity", conversationId: "c", activity: "Thinking" });
-    expect(state().chats.c?.approvals).toHaveLength(1);
-    // Responding (post-tool generation) is only reachable after every
-    // approval of the turn resolved — a lingering card was resolved elsewhere.
-    handleEvent({ type: "turn.activity", conversationId: "c", activity: "Responding" });
-    expect(state().chats.c?.approvals).toEqual([]);
-  });
-
-  it("respondApprovalFor decides in a chat that is not the active one", () => {
-    const { handleEvent } = state();
-    handleEvent({
-      type: "approval.requested",
-      conversationId: "c",
-      request: { requestId: "r1", toolCallId: null, toolName: "Bash", input: {}, suggestions: [] },
-    });
-    useAppStore.getState().respondApprovalFor("c", "r1", { behavior: "allow" });
-    expect(state().chats.c?.approvals).toEqual([]);
-    expect(bridge.respondApproval).toHaveBeenCalledWith("c", "r1", { behavior: "allow" });
-  });
-
-  it("looking at a conversation advances its read cursor", () => {
-    useAppStore.getState().openChat("conv-1");
-    expect(bridge.markConversationRead).toHaveBeenCalledWith("conv-1");
-  });
-
-  it("a turn the user is watching finish counts as looked at", () => {
-    useAppStore.getState().openChat("conv-1");
-    vi.mocked(bridge.markConversationRead).mockClear();
-    const { handleEvent } = state();
-    handleEvent({ type: "turn.finished", conversationId: "conv-1", error: undefined });
-    expect(bridge.markConversationRead).toHaveBeenCalledWith("conv-1");
-  });
-
-  it("a turn finishing elsewhere does not advance the active cursor", () => {
-    useAppStore.getState().openChat("conv-1");
-    vi.mocked(bridge.markConversationRead).mockClear();
-    const { handleEvent } = state();
-    handleEvent({ type: "turn.finished", conversationId: "conv-other", error: undefined });
-    expect(bridge.markConversationRead).not.toHaveBeenCalled();
   });
 
   it("ignores conversation updates that belong to another agent", async () => {
@@ -369,11 +318,11 @@ describe("sending", () => {
     expect(state().chats["conv-1"]).toMatchObject({ running: false, rows: [] });
   });
 
-  it("mid-run sends go through (queued server-side), blank text still blocked", async () => {
-    bridge.sendMessage.mockResolvedValue(conversation("conv-1"));
+  it("does not send blank text; mid-run sends queue instead of blocking", async () => {
     useAppStore.setState({ activeId: "conv-1" });
     state().handleEvent({ type: "turn.started", conversationId: "conv-1" });
-    await state().send("queued follow-up");
+    // Mid-run send on an existing conversation now multiplexes (queues).
+    await state().send("queued while running");
     expect(bridge.sendMessage).toHaveBeenCalledTimes(1);
     await state().send("   ");
     expect(bridge.sendMessage).toHaveBeenCalledTimes(1);
@@ -440,8 +389,7 @@ describe("agents", () => {
     useAppStore.setState({ activeId: "conv-1", view: "memory" });
 
     await state().deleteAgent();
-    // No agents left — home is the launch view, so it is the landing.
-    expect(state()).toMatchObject({ agentId: null, activeId: null, view: "home", conversations: [] });
+    expect(state()).toMatchObject({ agentId: null, activeId: null, view: "chat", conversations: [] });
   });
 
   it("replaces the agent in the list after an update", async () => {
@@ -449,201 +397,5 @@ describe("agents", () => {
     await state().updateAgent({ name: "Renamed" });
     expect(bridge.updateAgent).toHaveBeenCalledWith("agent-2", { name: "Renamed" });
     expect(state().agents.find((agent) => agent.id === "agent-2")?.name).toBe("Renamed");
-  });
-});
-
-describe("profiles", () => {
-  it("loads profiles during bootstrap", async () => {
-    bridge.listProfiles.mockResolvedValue(profilesResult());
-    await state().bootstrap();
-    expect(state().profiles).toEqual([profile("p-1")]);
-    expect(state().profilesLoaded).toBe(true);
-    expect(state().settings?.activeProfileId).toBe("p-1");
-  });
-
-  it("switching profiles updates state and asks the main process to reconnect", async () => {
-    const next = profilesResult({
-      settings: { ...settings, activeProfileId: "p-2" },
-      profiles: [profile("p-1"), profile("p-2")],
-      activeProfileId: "p-2",
-    });
-    bridge.setActiveProfile.mockResolvedValue(next);
-
-    await state().switchProfile("p-2");
-
-    expect(bridge.setActiveProfile).toHaveBeenCalledWith("p-2");
-    expect(state().settings?.activeProfileId).toBe("p-2");
-    expect(state().profiles).toHaveLength(2);
-  });
-
-  it("sign-in success stores the profile and list", async () => {
-    bridge.oauthSignIn.mockResolvedValue({ ok: true, profile: profile("p-9"), ...profilesResult({ profiles: [profile("p-9")] }) });
-    const created = await state().oauthSignIn();
-    expect(created.id).toBe("p-9");
-    expect(state().profiles).toEqual([profile("p-9")]);
-  });
-
-  it("sign-in failures surface the error", async () => {
-    bridge.oauthSignIn.mockResolvedValue({ ok: false, error: "browser said no" });
-    await expect(state().oauthSignIn()).rejects.toThrow("browser said no");
-  });
-
-  it("profile.signed-out shows a notice and reloads the profiles", async () => {
-    useAppStore.setState({ profiles: [profile("p-1")] });
-    state().handleEvent({ type: "profile.signed-out", profileId: "p-1" });
-    await flush();
-    expect(state().notice).toMatch(/signed out of profile p-1/i);
-    expect(bridge.listProfiles).toHaveBeenCalled();
-  });
-
-  it("deleting a profile updates the list", async () => {
-    bridge.deleteProfile.mockResolvedValue(profilesResult({ profiles: [], activeProfileId: null }));
-    await state().deleteProfile("p-1");
-    expect(bridge.deleteProfile).toHaveBeenCalledWith("p-1");
-    expect(state().profiles).toEqual([]);
-    expect(state().settings?.activeProfileId).toBeNull();
-  });
-});
-
-describe("sending with attachments", () => {
-  beforeEach(() => {
-    bridge.sendMessage.mockResolvedValue(conversation("conv-1"));
-  });
-
-  const attachment = {
-    id: "att-1",
-    name: "shot.png",
-    data: "aGk=",
-    mediaType: "image/jpeg" as const,
-    width: 4,
-    height: 4,
-  };
-
-  it("stages the images on the optimistic row and passes them to the runtime", async () => {
-    useAppStore.setState({ agentId: "agent-1", activeId: "conv-1" });
-    await state().send("look", [attachment]);
-
-    expect(bridge.sendMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "look", attachments: [attachment] }),
-    );
-    const row = state().chats["conv-1"]?.rows.find((item) => item.kind === "user");
-    expect(row).toMatchObject({ images: [attachment] });
-  });
-
-  it("allows an images-only send", async () => {
-    useAppStore.setState({ agentId: "agent-1", activeId: "conv-1" });
-    await state().send("", [attachment]);
-    expect(bridge.sendMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "", attachments: [attachment] }),
-    );
-  });
-
-  it("still refuses a send with neither text nor images", async () => {
-    useAppStore.setState({ agentId: "agent-1", activeId: "conv-1" });
-    await state().send("");
-    expect(bridge.sendMessage).not.toHaveBeenCalled();
-  });
-
-  it("reports a failed send so the composer keeps its staged images", async () => {
-    useAppStore.setState({ agentId: "agent-1", activeId: "conv-1" });
-    bridge.sendMessage.mockRejectedValue(new Error("offline"));
-    await expect(state().send("look", [attachment])).resolves.toBe(false);
-  });
-});
-
-describe("pickImages", () => {
-  it("surfaces skipped files as a notice", async () => {
-    bridge.selectImages.mockResolvedValue({
-      attachments: [],
-      skipped: ["huge.png — over the 25MB limit"],
-    });
-    await state().pickImages();
-    expect(state().notice).toBe("huge.png — over the 25MB limit");
-  });
-});
-
-describe("environment", () => {
-  beforeEach(connect);
-
-  const selector = { deviceId: "dev-1", connectionId: "conn-1", name: "MacBook" };
-
-  it("loads a conversation's environment when the chat opens", async () => {
-    bridge.getConversationEnv.mockResolvedValue({ selector: null });
-    state().openChat("conv-1");
-    await flush();
-    expect(bridge.getConversationEnv).toHaveBeenCalledWith("conv-1");
-    expect(state().conversationEnvs["conv-1"]).toEqual({ selector: null });
-  });
-
-  it("does not load an environment for the new chat", async () => {
-    state().openChat(null);
-    await flush();
-    expect(bridge.getConversationEnv).not.toHaveBeenCalled();
-  });
-
-  it("persists a pick and updates the mirror", async () => {
-    state().openChat("conv-1");
-    await state().pickEnvironment(selector);
-    expect(bridge.setConversationEnv).toHaveBeenCalledWith("conv-1", selector);
-    expect(state().conversationEnvs["conv-1"]).toEqual({ selector });
-    expect(bridge.setProfileEnvDefault).not.toHaveBeenCalled();
-  });
-
-  it("asDefault also writes the account default", async () => {
-    state().openChat("conv-1");
-    await state().pickEnvironment(selector, true);
-    expect(bridge.setProfileEnvDefault).toHaveBeenCalledWith(selector);
-    expect(state().profilesLoaded).toBe(true);
-  });
-
-  it("blocks a pick while the turn is running", async () => {
-    state().openChat("conv-1");
-    useAppStore.setState({
-      chats: {
-        "conv-1": {
-          rows: [],
-          loaded: true,
-          loading: false,
-          hasMore: false,
-          limit: 100,
-          running: true,
-          activity: null,
-          error: null,
-          approvals: [],
-          queue: [],
-        },
-      },
-    });
-    await state().pickEnvironment(selector);
-    expect(bridge.setConversationEnv).not.toHaveBeenCalled();
-    expect(state().notice).toMatch(/Wait for the current run/);
-  });
-
-  it("surfaces a failed save as a notice", async () => {
-    state().openChat("conv-1");
-    bridge.setConversationEnv.mockRejectedValue(new Error("Computer is offline: dev-1"));
-    await state().pickEnvironment(selector);
-    expect(state().notice).toBe("Computer is offline: dev-1");
-    expect(state().conversationEnvs["conv-1"]).toEqual({ selector: undefined });
-  });
-
-  it("refreshes the cloud computers list", async () => {
-    const computer: ComputerSummary = {
-      deviceId: "dev-1",
-      name: "MacBook",
-      connectionId: "conn-1",
-      status: "online",
-    };
-    bridge.listComputers.mockResolvedValue([computer]);
-    await state().refreshComputers();
-    expect(state().computers).toEqual([computer]);
-    expect(state().computersError).toBeNull();
-  });
-
-  it("records a computers listing failure", async () => {
-    bridge.listComputers.mockRejectedValue(new Error("cloud only"));
-    await state().refreshComputers();
-    expect(state().computers).toEqual([]);
-    expect(state().computersError).toBe("cloud only");
   });
 });

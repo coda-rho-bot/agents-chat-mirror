@@ -10,7 +10,6 @@ import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { broadcast, registerIpc } from "./ipc.js";
 import { disconnect, initRuntime } from "./libs/runtime.js";
-import { migrateLegacySettings } from "./libs/settings.js";
 import type { AppEvent } from "./types.js";
 import { DEV_URL, getIconPath, getPreloadPath, getUIPath, isAppUrl, isDev } from "./util.js";
 
@@ -19,8 +18,6 @@ const QUIT_TIMEOUT_MS = 3_000;
 
 let mainWindow: BrowserWindow | null = null;
 let quitting = false;
-/** Bearer token for the service's ingestion surface (set in deployment). */
-/** Single-operator fleet: the service's user namespace. */
 
 /** In development, a `.env` in the project root provides connection defaults. */
 function loadDevEnv(): void {
@@ -108,6 +105,21 @@ function buildMenu(): Menu {
   return Menu.buildFromTemplate(template);
 }
 
+
+/** Window title carries build identity: version + git SHA — a stale build
+ *  ("v0.2.0" forever) is undetectable without it. */
+function buildTitle(): string {
+  try {
+    const sha = require("node:child_process")
+      .execSync("git rev-parse --short HEAD", { cwd: app.getAppPath() })
+      .toString()
+      .trim();
+    return `OSS-UI v${app.getVersion()} (${sha})`;
+  } catch {
+    return `OSS-UI v${app.getVersion()}`;
+  }
+}
+
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1200,
@@ -140,9 +152,9 @@ function createWindow(): void {
     if (/^https?:\/\//.test(url)) void shell.openExternal(url);
   });
 
-  // Dev-only: surface renderer console + load failures in .dev.log. Without
-  // this, renderer-side crashes (e.g. the CSP-blocked preamble) are invisible
-  // from the main process and present as an unexplained blank window.
+  // Dev-only: surface renderer console + load failures in the main-process
+  // log. Without this, renderer-side crashes (e.g. a CSP-blocked preamble)
+  // are invisible from main and present as an unexplained blank window.
   if (isDev()) {
     mainWindow.webContents.on("console-message", (details) => {
       console.log(`[renderer:${details.level}] ${details.sourceId}:${details.lineNumber} ${details.message}`);
@@ -152,6 +164,7 @@ function createWindow(): void {
     });
   }
 
+  mainWindow.setTitle(buildTitle());
   if (isDev()) void mainWindow.loadURL(DEV_URL);
   else void mainWindow.loadFile(getUIPath());
 }
@@ -165,14 +178,11 @@ if (!app.requestSingleInstanceLock()) {
     mainWindow.focus();
   });
 
-  void app.whenReady().then(async () => {
+  void app.whenReady().then(() => {
     loadDevEnv();
     inheritShellPath();
     Menu.setApplicationMenu(buildMenu());
     registerIpc();
-    // One-shot: fold the pre-profiles single-connection settings into a
-    // profile before anything reads the connection config.
-    await migrateLegacySettings().catch(() => undefined);
     initRuntime(broadcast);
     createWindow();
 
@@ -181,7 +191,16 @@ if (!app.requestSingleInstanceLock()) {
     });
   });
 
-  app.on("window-all-closed", () => {
+  app.on("will-quit", () => {
+  // Adopted (external) registrations survive the app; owned ones die with it.
+  try {
+    require("./libs/remote-env.js").shutdownAdoption();
+  } catch {
+    // module not loaded — nothing to stop
+  }
+});
+
+app.on("window-all-closed", () => {
     if (!isMac) app.quit();
   });
 
@@ -192,7 +211,17 @@ if (!app.requestSingleInstanceLock()) {
     if (quitting) return;
     quitting = true;
     const timeout = new Promise((resolve) => setTimeout(resolve, QUIT_TIMEOUT_MS));
-    void Promise.race([disconnect(), timeout]).finally(() => app.exit(0));
+    void Promise.race([disconnect(), timeout]).finally(() => {
+      // app.exit() does NOT emit will-quit — stop the registration here or
+      // the spawned letta server orphans and the machine stays routable
+      // while the app is closed (Uncia finding 1).
+      try {
+        require("./libs/remote-env.js").shutdownAdoption();
+      } catch {
+        // module not loaded — nothing to stop
+      }
+      app.exit(0);
+    });
   });
 
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {

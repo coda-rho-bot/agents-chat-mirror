@@ -23,6 +23,7 @@ import type {
   SendMessageInput,
 } from "../types.js";
 import { startAppServer, type AppServerHandle } from "./app-server.js";
+import { adoptOrSpawn } from "./remote-env.js";
 import { serverBackend, setControlTarget } from "./control.js";
 import {
   type ConnectionConfig,
@@ -30,37 +31,13 @@ import {
   getConnectionConfig,
   getConversationCwd,
   getPermissionMode,
+  load,
   getSettings,
   rememberCwd,
   setAgentId,
 } from "./settings.js";
-import {
-  describeError,
-  historyOtids,
-  mergeHistory,
-  projectHistory,
-  toChatRow,
-} from "./transcript.js";
+import { describeError, mergeHistory, projectHistory, toChatRow } from "./transcript.js";
 import { wireContent, type AttachmentView } from "./attachments.js";
-import {
-  getConversationEnv,
-  listComputers as listCloudComputers,
-  sessionComputerOption,
-} from "./env.js";
-import type { ComputerSummary } from "../types.js";
-import { classifyResult, contentToText } from "@angus/letta-client-core";
-import { activeProfile, getProfileSecret, kv, onProfileSignedOut } from "./profiles.js";
-import { listAgentSchedules, mergeSchedules } from "./schedules.js";
-import { probeConversation } from "./pendingApprovals.js";
-import { listAgentProblems } from "./steps.js";
-import { newOutcomesSince, toCompletedRow } from "./completed.js";
-import { readCursor, writeCursor } from "./readCursors.js";
-import type {
-  CompletedRow,
-  HomeProbedApproval,
-  ProblemRow,
-  ScheduleSummary,
-} from "../types.js";
 
 /**
  * Everything that talks to Letta: the SDK client, agent and conversation
@@ -74,13 +51,15 @@ type PendingApproval = {
 
 type Turn = {
   conversationId: string;
+  /** Owning agent — approval/turn events carry it so cross-agent signal
+   *  resolution never depends on the renderer's index freshness. */
+  agentId: string;
   session: LettaCodeSession;
   accumulator: TranscriptAccumulator;
   /** Last version of each row sent to the renderer, for identity diffing. */
   sent: Map<string, TranscriptRow>;
   approvals: Map<string, PendingApproval>;
   activity: string | null;
-  queue: { id: string; text: string }[];
   flushTimer: NodeJS.Timeout | null;
   stopped: boolean;
   finished: boolean;
@@ -108,24 +87,10 @@ let connecting: Promise<LettaAgentClient> | null = null;
 let connection: ConnectionState = { status: "connecting", backend: "local" };
 
 const turns = new Map<string, Turn>();
-/**
- * Attachments behind sent messages, keyed by otid — stamps the echo row the
- * accumulator flushes (and any retry re-flush). In-memory only: after an app
- * restart an unflushed-but-sent message renders text-only until history
- * reconciliation re-attaches the images (no split-loss risk — unsent
- * messages drop text and images together).
- */
-const pendingAttachments = new Map<string, AttachmentView[]>();
 const conversations = new Map<string, ConversationSummary>();
 
 export function initRuntime(emitter: (event: AppEvent) => void): void {
   emit = emitter;
-  // A revoked OAuth session clears itself after repeated refresh refusals
-  // (profiles.ts); the renderer learns through this event and can prompt a
-  // fresh sign-in instead of a bare auth error one indirection away.
-  onProfileSignedOut((profileId) => {
-    emit({ type: "profile.signed-out", profileId });
-  });
   connection = { status: "connecting", backend: getConnectionConfig().backend };
   void ensureClient().catch(() => {
     // The failure is already reflected in the connection state.
@@ -155,32 +120,53 @@ function describeConnectionError(error: unknown, config: ConnectionConfig): stri
   return detail;
 }
 
-async function connect(): Promise<LettaAgentClient> {
-  let config = getConnectionConfig();
-  setConnection({ status: "connecting", backend: config.backend });
+function cloudClientForAdoption(): LettaAgentClient {
+  const config = getConnectionConfig();
+  return new LettaAgentClient({
+    backend: "cloud",
+    ...(config.apiKey ? { apiKey: config.apiKey } : {}),
+    ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
+  });
+}
 
-  // Profile connections resolve their secret at connect time (refreshing an
-  // expired OAuth credential via the core, single-flight). The built-in
-  // local connection and the legacy single-profile settings keep their
-  // existing behavior — no profile, no secret resolution.
-  const profile = activeProfile();
-  if (profile) {
-    const secret = await getProfileSecret(profile.id);
-    if (profile.type === "cloud") {
-      if (profile.authMethod === "oauth" && !secret) {
-        throw new Error("Your Letta Cloud session has ended — sign in again from Settings → Profiles.");
-      }
-      config = { ...config, apiKey: secret ?? "" };
-    } else {
-      config = { ...config, serverToken: secret ?? "" };
-    }
-  }
+async function connect(): Promise<LettaAgentClient> {
+  const config = getConnectionConfig();
+  setConnection({ status: "connecting", backend: config.backend });
 
   let next: LettaAgentClient | null = null;
   let owned: AppServerHandle | null = null;
+  const mode = load().executionMode ?? "local";
   try {
     let detail: string;
-    if (config.backend === "remote") {
+    // Execution mode 3 — cloud-only: direct cloud client. Sessions run in
+    // the SDK-managed sandbox or on a registered computer (per-conversation
+    // pick); no local process, no local file access.
+    if (mode === "cloud-only") {
+      next = new LettaAgentClient({
+        backend: "cloud",
+        ...(config.apiKey ? { apiKey: config.apiKey } : {}),
+        ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
+      });
+      detail = "Letta Cloud (cloud-only)";
+    }
+    // Execution mode 2 — remote-env: register this machine as a remote
+    // environment (letta server, remote mode), then connect as a cloud
+    // client; execution lands on this box's own registration.
+    if (!next && mode === "remote-env") {
+      // Adopt an existing online registration on this machine when present
+      // (never kills it); otherwise spawn ours. Watch/replace runs inside.
+      void adoptOrSpawn(cloudClientForAdoption(), {
+        ...(config.apiKey ? { LETTA_API_KEY: config.apiKey } : {}),
+        ...(config.apiBaseUrl ? { LETTA_BASE_URL: config.apiBaseUrl } : {}),
+      });
+      next = new LettaAgentClient({
+        backend: "cloud",
+        ...(config.apiKey ? { apiKey: config.apiKey } : {}),
+        ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
+      });
+      detail = "Letta Cloud (via this machine's remote registration)";
+    }
+    if (config.backend === "remote" && !next) {
       if (!config.serverUrl) throw new Error("Add your Letta server URL in Settings.");
       next = new LettaAgentClient({
         backend: "remote",
@@ -244,10 +230,43 @@ async function connect(): Promise<LettaAgentClient> {
 
 function ensureClient(): Promise<LettaAgentClient> {
   if (client) return Promise.resolve(client);
-  connecting ??= connect().finally(() => {
+  connecting ??= connectWithRetry().finally(() => {
     connecting = null;
   });
   return connecting;
+}
+
+/** connect() with a hard timeout and bounded retry — a wedged handshake
+ *  (adoption stall, silent spawn death) previously left the app on the
+ *  init spinner FOREVER with no retry and no error. Now: 45s cap per
+ *  attempt, 3 attempts with backoff, then a surfaced error state. */
+async function connectWithRetry(): Promise<LettaAgentClient> {
+  const TIMEOUT_MS = 45_000;
+  const MAX_ATTEMPTS = 3;
+  let lastError: unknown = null;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+    try {
+      const result = await Promise.race([
+        connect(),
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error(`Connection attempt ${attempt} timed out after ${TIMEOUT_MS / 1000}s`)),
+            TIMEOUT_MS,
+          ),
+        ),
+      ]);
+      return result;
+    } catch (error) {
+      lastError = error;
+      console.warn(`[connect] attempt ${attempt}/${MAX_ATTEMPTS} failed:`, String(error).slice(0, 200));
+      if (attempt < MAX_ATTEMPTS) {
+        await new Promise((resolve) => setTimeout(resolve, 2000 * attempt));
+      }
+    }
+  }
+  // All attempts exhausted: surface an error state (never spin forever).
+  setConnection({ status: "error", backend: getConnectionConfig().backend, error: String(lastError).slice(0, 300) });
+  throw lastError;
 }
 
 export async function disconnect(): Promise<void> {
@@ -287,122 +306,6 @@ export async function listAgents(): Promise<AgentSummary[]> {
   const sdk = await ensureClient();
   const agents = await sdk.agents.list({ limit: 100 });
   return agents.map(toAgentSummary);
-}
-
-/** Scheduled messages across the account's agents, soonest first (home). */
-export async function listSchedules(): Promise<ScheduleSummary[]> {
-  const agents = await listAgents();
-  const perAgent = await Promise.all(agents.map((agent) => listAgentSchedules(agent.id)));
-  return mergeSchedules(perAgent);
-}
-
-/** Probe cost bound: most recent conversation per agent, at most this many. */
-const PROBE_AGENT_CAP = 20;
-
-/**
- * §2.6 probe: approvals pending on the runtime with no live turn in this
- * client. Live turns' approvals already flow through events; the probe
- * covers the rest (another client's session, or a turn this client lost).
- * Sequential on purpose — each probe attaches a session briefly, and a
- * reconnect burst of 20 simultaneous sessions would be antisocial.
- * Total probe failure throws (honest section error); partial failure
- * stays honest-partial.
- */
-export async function listPendingApprovals(): Promise<HomeProbedApproval[]> {
-  const sdk = await ensureClient();
-  const agents = (await listAgents()).slice(0, PROBE_AGENT_CAP);
-  const found: HomeProbedApproval[] = [];
-  let failures = 0;
-  for (const agent of agents) {
-    const conversations = await listConversations(agent.id);
-    const latest = conversations[0];
-    if (!latest || turns.has(latest.id)) continue;
-    try {
-      // Tag the owning agent: the P4 probe-relay attributes each approval
-      // to its agent for the service's ingestion contract.
-      for (const probed of await probeConversation(sdk, latest.id)) {
-        found.push({ ...probed, agentId: agent.id });
-      }
-    } catch {
-      failures += 1;
-    }
-  }
-  if (failures > 0 && found.length === 0 && agents.length > 0) {
-    throw new Error("Could not check pending approvals — the runtime did not respond.");
-  }
-  return found;
-}
-
-/** Home scan bound: at most this many agents get per-conversation scans. */
-const SCAN_AGENT_CAP = 20;
-
-/**
- * Advance the conversation's read cursor to its newest message (§3.3).
- * Called when the user looks: on open, and when a turn they are watching
- * finishes. The cursor is app-owned (profiles.json kv, keyed by profile),
- * never agent memory.
- */
-export async function markConversationRead(conversationId: string): Promise<void> {
-  const profile = activeProfile();
-  if (!profile) return;
-  const sdk = await ensureClient();
-  const page = await sdk.conversations.listMessages(conversationId, { limit: 1, order: "desc" });
-  const latest = page.messages[0];
-  await writeCursor(kv(), profile.id, conversationId, {
-    messageId: latest?.id ?? null,
-    serverAt: latest?.date ?? null,
-  });
-}
-
-/**
- * "Completed since you last looked" (§3.1/§3.2): material outcomes only,
- * one row per conversation, newer than that conversation's read cursor.
- * A conversation with no cursor gets its BASELINE established (cursor =
- * newest message) and surfaces nothing — the first sync never floods the
- * home with the historical backlog. Unchanged conversations are pruned by
- * the cursor's server-side date before any message fetch.
- */
-export async function listCompletedSinceLastLook(): Promise<CompletedRow[]> {
-  const profile = activeProfile();
-  if (!profile) return [];
-  const sdk = await ensureClient();
-  const store = kv();
-  const agents = (await listAgents()).slice(0, SCAN_AGENT_CAP);
-  const rows: CompletedRow[] = [];
-  for (const agent of agents) {
-    const conversations = await listConversations(agent.id);
-    for (const conversation of conversations) {
-      const cursor = await readCursor(store, profile.id, conversation.id);
-      if (!cursor) {
-        await markConversationRead(conversation.id);
-        continue;
-      }
-      if (cursor.serverAt && conversation.updatedAt <= Date.parse(cursor.serverAt)) continue;
-      const page = await sdk.conversations.listMessages(conversation.id, { limit: 10, order: "desc" });
-      const row = toCompletedRow(
-        conversation.id,
-        agent.id,
-        newOutcomesSince(page.messages, cursor.messageId),
-      );
-      if (row) rows.push(row);
-    }
-  }
-  return rows.sort((a, b) => b.completedAt.localeCompare(a.completedAt));
-}
-
-/**
- * "Problems" (§3.4): observed run failures via the D2 steps module — the
- * latest failed step per agent, newest first. Missed schedules and
- * delivery failures are not derivable from the surveyed surfaces (see
- * steps.ts); failed scheduled runs do surface, since scheduled messages
- * execute through the same pipeline and leave steps.
- */
-export async function listProblems(): Promise<ProblemRow[]> {
-  const agents = (await listAgents()).slice(0, SCAN_AGENT_CAP);
-  const perAgent = await Promise.all(agents.map((agent) => listAgentProblems(agent.id)));
-  return perAgent
-    .filter((row): row is ProblemRow => row !== null)
-    .sort((a, b) => b.failedAt.localeCompare(a.failedAt));
 }
 
 export async function createAgent(input: { name: string; model?: string }): Promise<AgentSummary> {
@@ -475,17 +378,162 @@ function titleFrom(text: string): string {
   return line.length > TITLE_MAX_CHARS ? `${line.slice(0, TITLE_MAX_CHARS - 1).trimEnd()}...` : line;
 }
 
-export async function listConversations(agentId: string): Promise<ConversationSummary[]> {
+/** In-process memo: conversation ids already husk-checked (id -> true=real, false=husk).
+ * listMessages(limit 1) is the only reliable discriminator (husk=0 rows, real≥1;
+ * list-level fields are projection-unreliable). Memoized so the per-refresh cost
+ * is zero for previously-checked conversations. */
+const huskChecked = new Map<string, boolean>();
+
+async function hasMessages(sdk: Awaited<ReturnType<typeof ensureClient>>, conversationId: string): Promise<boolean> {
+  const memo = huskChecked.get(conversationId);
+  if (memo !== undefined) return memo;
+  try {
+    const page = (await sdk.conversations.listMessages(conversationId, { limit: 1 })) as unknown as {
+      messages?: unknown[];
+    };
+    const verdict = (page.messages?.length ?? 0) > 0;
+    huskChecked.set(conversationId, verdict);
+    return verdict;
+  } catch {
+    // Unprobeable — treat as real (fail open; the official client's behavior
+    // on unreachable rows is unknown, showing beats hiding on error).
+    return true;
+  }
+}
+
+/** In-process memo: display fields recovered via retrieve for rows whose list
+ * projection nulled summary+last_message_at (id -> fields). Only probe-PASSING
+ * rows land here (the probe proved them real); retrieve() is the only way to
+ * get their title/timestamp back for display. Memoized so repeat loads never
+ * re-retrieve (kills PR #13's per-refresh N1 tax). */
+const enrichedFields = new Map<string, { summary: string | null; last_message_at: string | null }>();
+
+async function enrichDisplayFields(
+  sdk: Awaited<ReturnType<typeof ensureClient>>,
+  conversationId: string,
+): Promise<void> {
+  if (enrichedFields.has(conversationId)) return;
+  try {
+    const full = await sdk.conversations.retrieve(conversationId);
+    enrichedFields.set(conversationId, {
+      summary: full.summary ?? null,
+      last_message_at: full.last_message_at ?? null,
+    });
+  } catch {
+    // Unenrichable — the row still shows (the probe passed it); it just lacks
+    // a title/timestamp until a later load succeeds. Left unmemoized so the
+    // next load retries.
+  }
+}
+
+export async function listConversationsFirstPage(
+  agentId: string,
+  pageSize = 25,
+): Promise<ConversationSummary[]> {
+  // Fast first paint WITHOUT husk flash: over-fetch 100, drop archived and
+  // title-less rows (husks render as "New chat"), then PROBE the first
+  // batch concurrently — verified rows in ~2s. The title filter alone let
+  // named cron shells through; the probe alone was too slow; both = right.
   const sdk = await ensureClient();
-  const list = await sdk.conversations.list({ agentId, limit: 100 });
-  return list
-    // Skip archived chats and the empty conversation every new agent starts with.
-    .filter(
-      (conversation) =>
-        !conversation.archived && Boolean(conversation.summary || conversation.last_message_at),
-    )
+  const page = await sdk.conversations.list({ agentId, limit: 100 });
+  const titled = page.filter(
+    (conversation) =>
+      !conversation.archived &&
+      Boolean(conversation.summary || conversation.last_message_at || (conversation as { name?: string | null }).name),
+  );
+  // Probe up to 2x pageSize candidates concurrently (10-wide) — enough
+  // survive husks to fill the page.
+  const candidates = titled.slice(0, pageSize * 2);
+  const verdicts = await Promise.all(
+    candidates.map((_, index) => {
+      const chunk = Math.floor(index / 10);
+      return new Promise<boolean>((resolve) => {
+        setTimeout(() => {
+          void hasMessages(sdk, candidates[index]!.id).then(resolve, () => resolve(false));
+        }, chunk * 150);
+      });
+    }),
+  );
+  return candidates
+    .filter((_, i) => verdicts[i])
+    .slice(0, pageSize)
     .map(toConversationSummary)
     .sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+export async function listConversations(agentId: string): Promise<ConversationSummary[]> {
+  const sdk = await ensureClient();
+  // Fetch ALL pages: the agent's conversation count can far exceed one page
+  // (443 here, ~400 cron husks), and real conversations sit beyond page 1.
+  const list = [];
+  let after: string | undefined;
+  let capped = false;
+  for (let page = 0; page < 10; page++) {
+    const batch = await sdk.conversations.list({
+      agentId,
+      limit: 100,
+      ...(after ? { after } : {}),
+    });
+    list.push(...batch);
+    if (batch.length < 100) break;
+    // A full 10th page means the loop exits with conversations still unfetched
+    // — silent truncation is the bug class that hides them, so say so loudly.
+    if (page === 9) capped = true;
+    after = batch[batch.length - 1]?.id;
+  }
+  if (capped) {
+    console.log("[convlist] pagination cap reached — conversations beyond page 10 are NOT shown");
+  }
+  // All non-archived rows are probe candidates. The SDK list projection
+  // intermittently nulls summary+last_message_at for REAL conversations
+  // (observed Nov 16-17; retrieve() returns them), so list-level fields are
+  // not a valid discriminator — the hasMessages probe is the single gate.
+  const candidates = list.filter((conversation) => !conversation.archived);
+  // Probe husk-status concurrently (10 at a time) — 447 sequential probes
+  // took minutes; batched concurrency brings first load to ~30s, and the
+  // memo makes every subsequent load instant.
+  const verdicts = await Promise.all(
+    candidates.map((_, index, all) => {
+      // Stagger: probe in waves of 10 via micro-chunking
+      const chunk = Math.floor(index / 10);
+      return new Promise<boolean>((resolve) => {
+        setTimeout(() => {
+          void hasMessages(sdk, all[index].id).then(resolve);
+        }, chunk * 150);
+      });
+    }),
+  );
+  const kept: typeof list = [];
+  for (let i = 0; i < candidates.length; i++) {
+    if (verdicts[i]) kept.push(candidates[i]);
+  }
+  // Rows that PASSED the probe but show null summary AND null last_message_at
+  // in the list projection are real conversations missing display fields —
+  // retrieve() fills title/last_message_at for display only (the probe already
+  // decided inclusion). Memoized, so each such row is retrieved once ever.
+  const needsDisplayFields = kept.filter(
+    (conversation) => !conversation.summary && !conversation.last_message_at,
+  );
+  await Promise.all(
+    needsDisplayFields.map((conversation) => enrichDisplayFields(sdk, conversation.id)),
+  );
+  // Merge the memoized display fields into each row before projection.
+  const result = kept
+    .map((conversation) => {
+      const extra = enrichedFields.get(conversation.id);
+      if (!extra) return conversation;
+      // Memo fills gaps, never overrides: list-present values win over the
+      // memoized null-day enrichment (rename-after-enrichment would else
+      // show the stale title until process restart). (Uncia N1, PR #15.)
+      return {
+        ...conversation,
+        summary: conversation.summary ?? extra.summary,
+        last_message_at: conversation.last_message_at ?? extra.last_message_at,
+      };
+    })
+    .map(toConversationSummary)
+    .sort((a, b) => b.updatedAt - a.updatedAt);
+  return result;
 }
 
 export async function renameConversation(
@@ -511,27 +559,13 @@ export async function loadHistory(conversationId: string, limit: number): Promis
   const page = await sdk.conversations.listMessages(conversationId, { limit, order: "desc" });
   const history = projectHistory(page.messages);
   const turn = turns.get(conversationId);
-  const result = {
-    rows: turn
-      ? mergeHistory(
-          history,
-          turn.accumulator.rows().map((row) => stampImages(row)),
-        )
-      : history,
+  return {
+    rows: turn ? mergeHistory(history, turn.accumulator.rows().map(toChatRow)) : history,
     hasMore: page.hasMore ?? page.messages.length >= limit,
     running: Boolean(turn),
     activity: turn?.activity ?? null,
     approvals: turn ? [...turn.approvals.values()].map((pending) => pending.request) : [],
   };
-  // The page is now the durable source for this conversation's images;
-  // otids it covers no longer need their in-memory staging copy.
-  for (const otid of historyOtids(page.messages)) pendingAttachments.delete(otid);
-  return result;
-}
-
-/** Cloud computers for the environment picker; errors propagate to the UI. */
-export async function listComputers(): Promise<ComputerSummary[]> {
-  return listCloudComputers(await ensureClient());
 }
 
 // --- Turns ------------------------------------------------------------------
@@ -547,16 +581,11 @@ function flushRows(turn: Turn): void {
   for (const row of turn.accumulator.rows()) {
     if (turn.sent.get(row.key) === row) continue;
     turn.sent.set(row.key, row);
-    changed.push(stampImages(row));
+    changed.push(toChatRow(row));
   }
   if (changed.length > 0) {
     emit({ type: "turn.rows", conversationId: turn.conversationId, rows: changed });
   }
-}
-
-/** A user row carries the attachments staged behind its otid, if any. */
-function stampImages(row: TranscriptRow): ChatRow {
-  return toChatRow(row, row.otid ? pendingAttachments.get(row.otid) : undefined);
 }
 
 function scheduleFlush(turn: Turn): void {
@@ -604,13 +633,18 @@ function finishTurn(turn: Turn, error?: string): void {
   }
 }
 
-async function runTurn(turn: Turn, text: string, otid: string): Promise<void> {
+async function runTurn(
+  turn: Turn,
+  text: string,
+  otid: string,
+  attachments: AttachmentView[] = [],
+): Promise<void> {
   let failure: string | undefined;
   try {
     // A conversation left waiting on an approval (for example, the app quit
     // mid-turn) stays wedged until the runtime re-drives it through canUseTool.
     await turn.session.recoverPendingApprovals({ timeoutMs: 5_000 }).catch(() => undefined);
-    await turn.session.send(wireContent(text, pendingAttachments.get(otid) ?? []), { otid });
+    await turn.session.send(wireContent(text, attachments), { otid });
 
     for await (const message of turn.session.stream()) {
       if (turn.finished) return;
@@ -618,22 +652,12 @@ async function runTurn(turn: Turn, text: string, otid: string): Promise<void> {
         case "error":
           failure = describeError(message.errorDetail ?? message.message);
           break;
-        case "result": {
-          const outcome = classifyResult(message);
-          if (outcome.kind === "stream_lost") {
-            // Transport died mid-turn; the run may complete server-side.
-            // Desktop has no uncertainty surface yet (no connection-banner
-            // equivalent for remote-backend socket death) — a silent
-            // truncation reads as completion. The error box renders
-            // unconditionally, so route the note through failure; retires
-            // with the Phase 1.5 uncertainty surface (reviews 2773/2776).
-            failure = failure ?? "Connection lost mid-turn — response may be incomplete";
-            break;
-          }
-          failure =
-            outcome.kind === "success" ? undefined : (failure ?? outcome.detail);
+        case "result":
+          failure = message.success
+            ? undefined
+            : (failure ??
+              describeError(message.errorDetail ?? message.error ?? "The turn failed."));
           break;
-        }
         case "retry": {
           // A retried turn re-streams from the top, so the rows written by the
           // abandoned attempt are dropped rather than accumulated onto.
@@ -650,19 +674,6 @@ async function runTurn(turn: Turn, text: string, otid: string): Promise<void> {
         case "loop_status":
           if (message.status in ACTIVITY) setActivity(turn, ACTIVITY[message.status]);
           break;
-        case "queue_update":
-          // Server-authoritative queue (own sends only — the relay does not
-          // fan out other clients' queue state; same limitation as loop_status).
-          turn.queue = message.queue.map((item) => ({
-            id: item.id,
-            text: contentToText(item.content),
-          }));
-          emit({
-            type: "turn.queue",
-            conversationId: turn.conversationId,
-            queue: turn.queue,
-          });
-          break;
         default:
           turn.accumulator.apply(message);
           scheduleFlush(turn);
@@ -675,34 +686,22 @@ async function runTurn(turn: Turn, text: string, otid: string): Promise<void> {
   }
 }
 
-export async function removeQueuedMessage(conversationId: string, itemId: string): Promise<void> {
-  const turn = turns.get(conversationId);
-  const session = turn?.session;
-  if (!session) return;
-  // Never remove optimistically — the server's next queue_update confirms.
-  // Pending-removal marking is a UI concern once the renderer tracks it.
-  await session.removeQueuedMessage(itemId);
-}
-
 export async function sendMessage(input: SendMessageInput): Promise<ConversationSummary> {
   const sdk = await ensureClient();
   const text = input.text.trim();
-  const attachments = input.attachments ?? [];
-  if (!text && attachments.length === 0) throw new Error("Message is empty.");
-  if (attachments.length > 0) pendingAttachments.set(input.otid, attachments);
-
-  // Mid-run send on an existing conversation: route through the ACTIVE
-  // turn's session (the server queues it behind the busy run; the active
-  // stream observes the queue_update). Never create a second Turn — that
-  // would orphan Stop (aborting the wrong session) and race finishTurn.
-  if (input.conversationId) {
-    const active = turns.get(input.conversationId);
-    if (active && !active.finished) {
-      await active.session.send(wireContent(text, attachments), { otid: input.otid });
-      const known = conversations.get(input.conversationId);
-      if (!known) throw new Error("Conversation is not loaded.");
-      return known;
-    }
+  if (!text) throw new Error("Message is empty.");
+  // Mid-run sends on the ACTIVE session queue server-side (the session
+  // multiplexes); only a DIFFERENT stuck turn blocks. Matches the runtime
+  // change the Angus client shipped (queue-while-running).
+  const active = input.conversationId ? turns.get(input.conversationId) : undefined;
+  if (active && active.finished) {
+    throw new Error("This chat is finishing up. Try again in a moment.");
+  }
+  if (active && !active.finished) {
+    await active.session.send(wireContent(text, input.attachments ?? []), { otid: input.otid });
+    const known = conversations.get(input.conversationId!);
+    if (!known) throw new Error("Conversation is not loaded.");
+    return known;
   }
 
   let conversation: ConversationSummary;
@@ -712,15 +711,12 @@ export async function sendMessage(input: SendMessageInput): Promise<Conversation
       toConversationSummary(await sdk.conversations.retrieve(input.conversationId));
     if (!conversation.title) {
       conversation = toConversationSummary(
-        await sdk.conversations.update(conversation.id, { summary: titleFrom(text) || "Image" }),
+        await sdk.conversations.update(conversation.id, { summary: titleFrom(text) }),
       );
     }
   } else {
     conversation = toConversationSummary(
-      await sdk.conversations.create({
-        agentId: input.agentId,
-        summary: titleFrom(text) || "Image",
-      }),
+      await sdk.conversations.create({ agentId: input.agentId, summary: titleFrom(text) }),
     );
   }
 
@@ -735,22 +731,13 @@ export async function sendMessage(input: SendMessageInput): Promise<Conversation
   };
   conversations.set(conversation.id, conversation);
 
-  // The environment this turn runs in: the conversation's explicit choice,
-  // else the account default, else the SDK's managed sandbox. Per-turn
-  // sessions, so a pick made mid-run applies to the NEXT send — the running
-  // turn keeps its already-attached environment.
-  const computer = sessionComputerOption(
-    await getConversationEnv(conversation.id),
-    activeProfile()?.computerSelector,
-  );
-
   const turn: Turn = {
     conversationId: conversation.id,
+    agentId: conversation.agentId,
     accumulator: createTranscriptAccumulator(),
     sent: new Map(),
     approvals: new Map(),
     activity: "Starting",
-    queue: [],
     flushTimer: null,
     stopped: false,
     finished: false,
@@ -758,7 +745,14 @@ export async function sendMessage(input: SendMessageInput): Promise<Conversation
       cwd: input.cwd,
       permissionMode: getPermissionMode(),
       ...(input.model ? { model: input.model } : {}),
-      ...(computer ? { computer } : {}),
+      // computer overrides are only valid on cloud sessions (the SDK rejects
+      // them on local/remote clients). In private/local mode execution is
+      // this machine's app server by construction — the override is void.
+      ...((sdk as { backend?: string }).backend === "cloud" && input.computer
+        ? { computer: input.computer }
+        : {}),
+      // Wire accepts "max" (CLI catalog) though the SDK type omits it.
+      ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort as import("@letta-ai/letta-agent-sdk").ReasoningEffort } : {}),
       canUseTool: (toolName, toolInput, context) =>
         new Promise<CanUseToolResponse>((resolve) => {
           const request: ApprovalRequest = {
@@ -771,13 +765,18 @@ export async function sendMessage(input: SendMessageInput): Promise<Conversation
           turn.approvals.set(request.requestId, { request, resolve });
           // Make sure the tool call is on screen before asking about it.
           flushRows(turn);
-          emit({ type: "approval.requested", conversationId: turn.conversationId, request });
+          emit({
+            type: "approval.requested",
+            conversationId: turn.conversationId,
+            agentId: turn.agentId,
+            request,
+          });
         }),
     }),
   };
   turns.set(conversation.id, turn);
-  emit({ type: "turn.started", conversationId: conversation.id });
-  void runTurn(turn, text, input.otid);
+  emit({ type: "turn.started", conversationId: conversation.id, agentId: turn.agentId });
+  void runTurn(turn, text, input.otid, input.attachments ?? []);
 
   return conversation;
 }

@@ -22,11 +22,11 @@ export type AppSettings = {
   /** Secrets never leave the main process; the renderer only learns whether one is set. */
   hasApiKey: boolean;
   hasServerToken: boolean;
-  /** The active connection profile; null = the built-in local connection. */
-  activeProfileId: string | null;
   permissionMode: PermissionMode;
-  /** Agent selected for the current profile (or backend, when profile-less). */
+  /** Agent selected for the current backend. */
   agentId: string | null;
+  /** Agent id -> last-open conversation id. */
+  lastConversationByAgent: Record<string, string>;
   recentCwds: string[];
   defaultCwd: string;
 };
@@ -40,166 +40,22 @@ export type SettingsUpdate = {
   serverToken?: string | null;
   permissionMode?: PermissionMode;
   agentId?: string | null;
+  /** Merge-in: agent id -> last-open conversation id. */
+  lastConversationByAgent?: Record<string, string>;
 };
 
-/** A connection profile, as the renderer sees it — no secrets, only presence. */
-export type ProfileSummary = {
+import type { ComputerSummary, ComputerSelectorField, ConversationEnv } from "./libs/env.js";
+export type { ComputerSummary, ComputerSelectorField, ConversationEnv };
+/** A saved connection: a named snapshot of the flat connection settings. */
+export type SavedConnection = {
   id: string;
   name: string;
-  type: "cloud" | "remote";
-  /** Cloud: API base URL. Remote: WebSocket URL. */
-  url: string;
-  authMethod: "oauth" | "api_key" | null;
-  hasCredential: boolean;
-  /** Cloud only: the environment new conversations route to. */
-  computerSelector?: ComputerSelectorField;
-  /** Result of the last "Test connection" run (mirrors mobile). */
-  lastTest?: "ok" | "unauthorized" | "unreachable";
-  /** Pinned profiles sort to the top of the list (mirrors mobile). */
-  pinned: boolean;
+  backend: BackendKind;
+  apiBaseUrl?: string;
+  serverUrl?: string;
+  /** Unix ms of the last switch to this connection (most-recent sorts first). */
+  usedAt: number;
 };
-
-/**
- * Mirrors of the core's environment-selection types
- * (@angus/letta-client-core env/selector.ts + env/conversationEnv.ts). The
- * renderer project compiles without node types, so this shared boundary
- * re-declares the shapes rather than importing the core source; the electron
- * project's IPC handler assignability compile-checks the mirror against the
- * real core types, so drift fails the build instead of slipping through.
- */
-export type ComputerSelectorField =
-  | string
-  | { name: string }
-  | { deviceId: string }
-  | { id: string }
-  | { connectionId: string; name?: string }
-  /** Preferred: stable device identity + display name; the connection lease
-   *  is resolved at session-attach time (leases change on remote restarts). */
-  | { deviceId: string; connectionId: string; name?: string };
-
-export type ConversationEnv = {
-  /** null = explicit Cloud Sandbox; undefined = inherit profile default. */
-  selector: ComputerSelectorField | null | undefined;
-};
-
-/**
- * Mirror of the core's ComputerSummary (env/computers.ts) — the renderer
- * project compiles without node types, so this shared boundary re-declares
- * the shape rather than importing the core source; the electron project's
- * IPC handler assignability compile-checks the mirror against the core's
- * type, so drift fails the build.
- */
-export type ComputerSummary = {
-  /** Stable identifier for the physical device across reconnects. */
-  deviceId: string;
-  /** Human-readable computer name. */
-  name: string;
-  /** Current online connection lease (null when offline). */
-  connectionId: string | null;
-  status: "online" | "offline";
-};
-
-/** How a home row's data was fetched — the home's honesty element. */
-export type Provenance = {
-  /** live: SDK stream surface; rest: direct cloud REST; cached: stored result. */
-  source: "live" | "rest" | "cached";
-  /** When the fetch completed (ms epoch). */
-  fetchedAt: number;
-};
-
-/** A scheduled message from the cloud REST API (the D1 module's projection). */
-export type ScheduleSummary = {
-  id: string;
-  agentId: string;
-  /** Best-effort first-message text; empty when the shape is unexpected. */
-  promptPreview: string;
-  /** ISO time of the next fire; null when the server has not computed one. */
-  nextScheduledTime: string | null;
-  kind: "one-time" | "recurring";
-  cronExpression: string | null;
-};
-
-/**
- * A pending approval discovered by the §2.6 probe (no live turn in this
- * client — the runtime is still waiting, possibly on another client).
- */
-export type HomeProbedApproval = {
-  conversationId: string;
-  /** Owning agent (probe-relay attribution; optional for shape compatibility). */
-  agentId?: string | null;
-  request: ApprovalRequest;
-  /** When the probe observed it (ms epoch). */
-  receivedAt: number;
-};
-
-/** One material outcome completed since the conversation's read cursor. */
-export type CompletedRow = {
-  conversationId: string;
-  agentId: string;
-  /** The latest new assistant message (one row per conversation, §3.1). */
-  messageId: string;
-  /** Best-effort text of that outcome. */
-  preview: string;
-  /** Server-side date (ISO) of that outcome. */
-  completedAt: string;
-};
-
-/** One observed run failure (latest failed step per agent, collapsed). */
-export type ProblemRow = {
-  agentId: string;
-  stepId: string;
-  errorType: string | null;
-  stopReason: string | null;
-  /** The surface that initiated the failed step, when reported. */
-  origin: string | null;
-  /** Server-side date (ISO) of the failed step. */
-  failedAt: string;
-};
-
-/** One home section's honest state: loading, ready with provenance, or error. */
-export type HomeSectionState<Row> = {
-  status: "loading" | "ready" | "error";
-  rows: Row[];
-  provenance: Provenance | null;
-  error: string | null;
-};
-
-/** The home view's data: sections 1-2 (sections 3-5 are P4/P5 panes). */
-export type HomeState = {
-  agents: HomeSectionState<AgentSummary>;
-  schedules: HomeSectionState<ScheduleSummary>;
-  /** Probed approvals; live approvals flow reactively via chat state. */
-  needsYou: HomeSectionState<HomeProbedApproval>;
-  /** Material outcomes newer than each conversation's read cursor. */
-  completed: HomeSectionState<CompletedRow>;
-  /** Observed run failures (steps), newest first. */
-  problems: HomeSectionState<ProblemRow>;
-};
-
-/** Profile mutations: a string replaces the stored secret, omitted keeps it. */
-export type ProfileSave = {
-  /** Omitted (or unknown) creates a new profile. */
-  id?: string;
-  type: "cloud" | "remote";
-  name: string;
-  url: string;
-  secret?: string;
-};
-
-/** Everything a profile mutation returns, so the UI updates in one round trip. */
-export type ProfilesResult = {
-  settings: AppSettings;
-  profiles: ProfileSummary[];
-  activeProfileId: string | null;
-};
-
-export type TestResult =
-  | { ok: true; detail: string }
-  | { ok: false; reason: "unauthorized" | "unreachable" | "invalid_url"; detail: string };
-
-export type OAuthSignInResult =
-  | ({ ok: true; profile: ProfileSummary } & ProfilesResult)
-  | { ok: false; error: string };
 
 export type ConnectionState =
   | { status: "connecting"; backend: BackendKind }
@@ -237,6 +93,10 @@ export type ModelOption = {
   id: string;
   handle: string;
   label: string;
+  /** Live catalog reasoning_capabilities (null when the field is unpopulated). */
+  efforts: string[] | null;
+  defaultEffort: string | null;
+  reasoningMandatory: boolean | null;
 };
 
 export type ProviderField = {
@@ -306,18 +166,6 @@ export type ChatTextRow = {
   text: string;
   /** Correlates an optimistic user row with the message Letta persists. */
   otid?: string;
-  /** Images sent with this row — present on user rows only. */
-  images?: AttachmentView[];
-};
-
-/** An image attachment as the renderer stages it — base64 data, never a path. */
-export type AttachmentView = {
-  id: string;
-  name: string;
-  data: string;
-  mediaType: "image/jpeg";
-  width: number;
-  height: number;
 };
 
 export type ChatToolRow = {
@@ -361,70 +209,100 @@ export type SendMessageInput = {
   otid: string;
   cwd: string;
   model?: string;
-  /** Images to send with the message; empty text is allowed when present. */
-  attachments?: AttachmentView[];
+  /** Execution target for this turn: a computer selector (sandbox = omit). */
+  computer?: import("@letta-ai/letta-agent-sdk").ComputerSelector;
+  /** Reasoning tier for the session target (absent = model default). */
+  /** Wire accepts "max" (CLI catalog validator) though the SDK type omits it. */
+  reasoningEffort?: import("@letta-ai/letta-agent-sdk").ReasoningEffort | "max";
+  /** Image attachments: intake-processed JPEG views. */
+  attachments?: import("./libs/attachments.js").AttachmentView[];
 };
 
 /** Main -> renderer push events. */
+// (remote_auth variant appended below)
 export type AppEvent =
+  | { type: "remote_adoption"; adoption: import("./libs/remote-env.js").AdoptedState }
+  | { type: "remote_handover"; handover: import("./libs/remote-env.js").HandoverState }
+  | { type: "remote_auth"; auth: import("./libs/remote-env.js").RemoteAuthState }
   | { type: "connection"; state: ConnectionState }
-  | { type: "turn.started"; conversationId: string }
+  | { type: "turn.started"; conversationId: string; agentId?: string }
   | { type: "turn.rows"; conversationId: string; rows: ChatRow[] }
   | { type: "turn.rows.removed"; conversationId: string; keys: string[] }
   | { type: "turn.activity"; conversationId: string; activity: string | null }
   | { type: "turn.finished"; conversationId: string; error?: string }
-  | { type: "turn.queue"; conversationId: string; queue: QueuedItem[] }
-  | { type: "approval.requested"; conversationId: string; request: ApprovalRequest }
+  | { type: "approval.requested"; conversationId: string; agentId?: string; request: ApprovalRequest }
   | { type: "approval.resolved"; conversationId: string; requestId: string }
   | { type: "conversation.updated"; conversation: ConversationSummary }
-  | { type: "profile.signed-out"; profileId: string }
   | { type: "menu"; command: "new-chat" | "settings" };
 
-
 /** Renderer -> main requests. Every method is an `ipcRenderer.invoke` round trip. */
-/** A queued follow-up, from the server's queue_update frames. */
-export type QueuedItem = { id: string; text: string };
+export type ExecutionMode = "local" | "remote-env" | "cloud-only";
+
+export type RemoteEnvStatus = { running: boolean; effectiveName: string | null; connectionId: string | null };
 
 export type AppRequests = {
   getSettings(): AppSettings;
+  listComputers(): ComputerSummary[];
+  getConversationEnv(conversationId: string): ConversationEnv;
+  getAllConversationEnvs(): Record<string, ComputerSelectorField | null>;
+  getAgentLayout(): { order: string[]; pinned: string[] };
+  listMonitors(input: { conversationId: string }): Array<{ id: string; description: string | null; status: string | null; kind: string | null }> | Array<{ id: string; description: string; status: "unavailable"; kind: "error" }>;
+  agentRailStatus(input: { agentId: string }): Promise<{ agentId: string; latestAt: string | null; latestConversationId: string | null }>;
+  setAgentLayout(input: { order: string[]; pinned: string[] }): { order: string[]; pinned: string[] };
+  setConversationEnv(input: {
+    conversationId: string;
+    /** null = cloud sandbox; undefined = inherit the mode default. */
+    selector: ComputerSelectorField | null | undefined;
+  }): ConversationEnv;
+  getExecutionMode(): ExecutionMode;
+  getRemoteEnvName(): string;
+  listRemoteDirectory(input: {
+    /** null = the SDK-managed sandbox; else a computer selector. */
+    selector: import("@letta-ai/letta-agent-sdk").ComputerSelector | null;
+    path: string;
+  }): string[];
+  getConversationCwd(conversationId: string): string | null;
+  clearBrowseCache(): void;
+  schedulesByConversation(input: { agentId: string }): Record<string, Array<{ id: string; name: string; status?: string }>>;
+  listSchedules(input: { agentId: string }): Promise<import("./libs/schedules.js").CronTask[]>;
+  pauseSchedule(input: { taskId: string }): Promise<void>;
+  resumeSchedule(input: { taskId: string }): Promise<void>;
+  deleteSchedule(input: { taskId: string }): Promise<void>;
+  triggerSchedule(input: { taskId: string }): Promise<void>;
+  selectImages(): Promise<{
+    attachments: import("./libs/attachments.js").AttachmentView[];
+    skipped: string[];
+  }>;
+  getPinnedConversations(): string[];
+  togglePinnedConversation(input: { conversationId: string }): string[];
+  getReadCursors(): Record<string, number>;
+  markConversationRead(input: { conversationId: string; updatedAt: number }): Record<string, number>;
+  markAllConversationsRead(input: {
+    items: Array<{ conversationId: string; updatedAt: number }>;
+  }): Record<string, number>;
+  getOsNotifications(): boolean;
+  setOsNotifications(input: { enabled: boolean }): boolean;
+  getDefaultDirectory(input: {
+    selector: import("@letta-ai/letta-agent-sdk").ComputerSelector | null;
+  }): string;
+  getTargetFolder(input: { targetKey: string }): string | null;
+  setTargetFolder(input: { targetKey: string; folder: string | null }): string | null;
+  setRemoteEnvName(input: { name: string }): string;
+  setExecutionMode(mode: ExecutionMode): ExecutionMode;
+  getRemoteEnvStatus(): RemoteEnvStatus;
+  getRemoteAdoption(): import("./libs/remote-env.js").AdoptedState;
+  getRemoteHandover(): import("./libs/remote-env.js").HandoverState;
+  getRemoteAuth(): import("./libs/remote-env.js").RemoteAuthState;
+  openRemoteAuthUrl(input: { url: string }): boolean;
+  adoptRemoteEnv(): import("./libs/remote-env.js").AdoptedState;
   updateSettings(update: SettingsUpdate): AppSettings;
+  listSavedConnections(): SavedConnection[];
+  saveCurrentConnection(name: string): SavedConnection[];
+  switchSavedConnection(input: { id: string }): SavedConnection[];
+  deleteSavedConnection(input: { id: string }): SavedConnection[];
   getConnection(): ConnectionState;
   reconnect(): ConnectionState;
-  listProfiles(): ProfilesResult;
-  saveProfile(input: ProfileSave): ProfilesResult;
-  deleteProfile(profileId: string): ProfilesResult;
-  signOutProfile(profileId: string): ProfilesResult;
-  /** Run a real connection test (cloud REST / remote WS) against a profile's stored credential. */
-  testProfileConnection(profileId: string): Promise<TestResult>;
-  /** Toggle a profile's pinned flag (pinned sorts first). */
-  toggleProfilePin(profileId: string): Promise<ProfilesResult>;
-  /** null switches to the built-in local connection. */
-  setActiveProfile(profileId: string | null): ProfilesResult;
-  /** Sign in with Letta; targets an existing profile or creates a new one. */
-  oauthSignIn(profileId?: string): OAuthSignInResult;
-  /** Cloud only; throws on other backends (the chip renders cloud-only). */
-  listComputers(): ComputerSummary[];
-  /** The environment choice for one conversation. */
-  getConversationEnv(conversationId: string): ConversationEnv;
-  /** Persist an explicit choice: null = Cloud Sandbox, selector = a computer. */
-  setConversationEnv(
-    conversationId: string,
-    selector: ComputerSelectorField | null,
-  ): ConversationEnv;
-  /** Set/clear the account default for new conversations. */
-  setProfileEnvDefault(selector: ComputerSelectorField | null): ProfilesResult;
-  removeQueuedMessage(conversationId: string, itemId: string): void;
   listAgents(): AgentSummary[];
-  /** Scheduled messages across the account's agents (cloud REST, D1 module). */
-  listSchedules(): Promise<ScheduleSummary[]>;
-  /** §2.6 probe: approvals pending on the runtime with no live turn here. */
-  listPendingApprovals(): Promise<HomeProbedApproval[]>;
-  /** §3.1 outcomes newer than each conversation's app-owned read cursor. */
-  listCompletedSinceLastLook(): Promise<CompletedRow[]>;
-  /** Observed run failures via the D2 steps module, newest first. */
-  listProblems(): Promise<ProblemRow[]>;
-  /** Advance the conversation's read cursor to its newest message (§3.3). */
-  markConversationRead(conversationId: string): Promise<void>;
   createAgent(input: { name: string; model?: string }): AgentSummary;
   getAgent(agentId: string): AgentDetails;
   updateAgent(agentId: string, update: AgentUpdate): AgentSummary;
@@ -444,12 +322,11 @@ export type AppRequests = {
   listMemoryHistory(agentId: string, path: string): MemoryCommit[];
   readMemoryFileAt(agentId: string, path: string, sha: string): string;
   listConversations(agentId: string): ConversationSummary[];
+  listConversationsFirstPage(agentId: string): ConversationSummary[];
   loadHistory(conversationId: string, limit: number): HistoryResult;
   renameConversation(conversationId: string, title: string): ConversationSummary;
   archiveConversation(conversationId: string): void;
   sendMessage(input: SendMessageInput): ConversationSummary;
-  /** Pick image files (native dialog) and run intake; skipped files come back with reasons. */
-  selectImages(): { attachments: AttachmentView[]; skipped: string[] };
   stopTurn(conversationId: string): void;
   respondApproval(conversationId: string, requestId: string, decision: ApprovalDecision): void;
   selectDirectory(): string | null;

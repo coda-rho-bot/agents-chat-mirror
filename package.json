@@ -29,9 +29,8 @@
     "bundle:electron": "bun run transpile:electron && esbuild src/electron/main.ts --bundle --platform=node --format=esm --sourcemap --external:electron --external:@letta-ai/letta-agent-sdk --external:@letta-ai/letta-code --external:'@letta-ai/letta-code/*' --outfile=dist-electron/main.js"
   },
   "dependencies": {
-    "@letta-ai/letta-agent-sdk": "0.8.39",
-    "@letta-ai/letta-code": "0.34.10",
-    "@angus/letta-client-core": "git+https://git.angussoftware.dev/coda/letta-client-core.git#323618c47dde9e8a82bb169ef7f80599abd015fa"
+    "@letta-ai/letta-agent-sdk": "0.8.32",
+    "@letta-ai/letta-code": "0.34.6"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -46,7 +45,6 @@
     "cross-env": "^10.1.0",
     "electron": "^44.7.0",
     "electron-builder": "^26.15.3",
-    "esbuild": "^0.28.2",
     "eslint": "^10.12.0",
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.5.7",
@@ -62,20 +60,15 @@
     "typescript-eslint": "^8.71.1",
     "vite": "^8.3.4",
     "vitest": "^5.0.3",
-    "zustand": "^5.0.10"
+    "zustand": "^5.0.10",
+    "esbuild": "^0.28.2"
   },
   "trustedDependencies": [
-    "@google/genai",
     "@letta-ai/letta-code",
-    "@scarf/scarf",
-    "electron",
-    "electron-winstaller",
-    "node-pty",
-    "protobufjs",
-    "sharp"
+    "electron"
   ],
   "overrides": {
-    "@letta-ai/letta-agent-sdk": "0.8.39",
-    "@letta-ai/letta-code": "0.34.10"
+    "@letta-ai/letta-agent-sdk": "0.8.32",
+    "@letta-ai/letta-code": "0.34.6"
   }
 }

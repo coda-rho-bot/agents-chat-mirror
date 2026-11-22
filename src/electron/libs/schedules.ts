@@ -1,96 +1,65 @@
-import { activeProfile, getProfileSecret } from "./profiles.js";
-import type { ScheduleSummary } from "../types.js";
-
 /**
- * The D1 REST module — app-side REST to Letta Cloud for schedules.
- *
- * Why this exists: the Agent SDK has NO schedule/run listing surface (verified
- * against @letta-ai/letta-agent-sdk 0.8.39 — no schedules client method), so
- * the home's "Next scheduled" section reads the public REST API directly:
- * GET /v1/agents/{agent_id}/schedule. The response shape below is the minimal
- * structural typing of that endpoint (Letta API reference, scheduled
- * messages). Provenance ledger: PROVENANCE.md.
- *
- * Auth invariant: the OAuth token is resolved HERE, in main, through the
- * existing transport plumbing (getProfileSecret — refresh, single-flight,
- * strike-out). Only the projected ScheduleSummary crosses the bridge; tokens
- * never cross the bridge and never leave main.
- *
- * Cloud only: local-backend schedules live on the machine that created them
- * and are not in the cloud API, so a non-cloud (or signed-out) profile
- * honestly yields an empty list rather than an error.
+ * Schedules (cron) via the app-server protocol: list/pause/resume/delete/trigger.
+ * Schedules speak the app-server control protocol (control.ts): any mode
+ * with an app-server — local AND remote-env — works. Cloud-only mode has
+ * no app-server; the panel surfaces that error honestly.
  */
+import { request } from "./control.js";
 
-/** Minimal structural typing of the REST response (unknown fields ignored). */
-interface RawScheduledMessage {
+export interface CronTask {
   id: string;
-  agent_id: string;
-  message: {
-    messages?: { content?: string | { text?: string }[] }[];
-  } | null;
-  next_scheduled_time: string | null;
-  schedule: {
-    type?: string;
-    scheduled_at?: number;
-    cron_expression?: string;
-  } | null;
+  name: string;
+  description: string;
+  cron: string;
+  timezone?: string | null;
+  recurring: boolean;
+  prompt?: string;
+  scheduled_for?: string | null;
+  conversation_id?: string;
+  agent_id?: string;
+  /** "active" | "paused" — the wire uses status, not a paused boolean. */
+  status?: string;
 }
 
-interface RawScheduleListResponse {
-  scheduled_messages?: RawScheduledMessage[];
+export async function listSchedules(agentId: string): Promise<CronTask[]> {
+  const reply = await request<{ type: string; request_id?: string; success?: boolean; tasks?: CronTask[] }>("cron_list", { agent_id: agentId });
+  return reply.tasks ?? [];
 }
 
-/** Best-effort prompt preview: the first message's text content. */
-export function firstText(
-  content: string | { text?: string }[] | undefined,
-): string {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return content.find((part) => typeof part?.text === "string")?.text ?? "";
+export async function pauseSchedule(taskId: string): Promise<void> {
+  await request("cron_pause", { task_id: taskId });
 }
 
-/** Project one raw REST record to the bridge-safe summary. */
-export function toScheduleSummary(raw: RawScheduledMessage): ScheduleSummary {
-  const schedule = raw.schedule ?? {};
-  const recurring = schedule.type === "recurring" || schedule.cron_expression !== undefined;
-  return {
-    id: raw.id,
-    agentId: raw.agent_id,
-    promptPreview: firstText(raw.message?.messages?.[0]?.content),
-    nextScheduledTime: raw.next_scheduled_time,
-    kind: recurring ? "recurring" : "one-time",
-    cronExpression: recurring ? (schedule.cron_expression ?? null) : null,
-  };
+export async function resumeSchedule(taskId: string): Promise<void> {
+  await request("cron_resume", { task_id: taskId });
 }
 
-/** Merge per-agent lists into one, soonest first; unscheduled last. */
-export function mergeSchedules(perAgent: ScheduleSummary[][]): ScheduleSummary[] {
-  const all = perAgent.flat();
-  return all.sort((a, b) => {
-    if (!a.nextScheduledTime && !b.nextScheduledTime) return a.id.localeCompare(b.id);
-    if (!a.nextScheduledTime) return 1;
-    if (!b.nextScheduledTime) return -1;
-    return a.nextScheduledTime.localeCompare(b.nextScheduledTime);
-  });
+export async function deleteSchedule(taskId: string): Promise<void> {
+  await request("cron_delete", { task_id: taskId });
 }
 
-/** List one agent's scheduled messages via the cloud REST API. */
-export async function listAgentSchedules(agentId: string): Promise<ScheduleSummary[]> {
-  const profile = activeProfile();
-  if (!profile || profile.type !== "cloud") return [];
-  const secret = await getProfileSecret(profile.id);
-  if (!secret) return [];
-  const base = profile.url.replace(/\/$/, "");
-  const response = await fetch(`${base}/v1/agents/${agentId}/schedule`, {
-    headers: { Authorization: `Bearer ${secret}` },
-    signal: AbortSignal.timeout(15_000),
-  });
-  if (!response.ok) {
-    throw new Error(`Could not load schedules from Letta Cloud (${response.status}).`);
+export async function triggerSchedule(taskId: string): Promise<void> {
+  await request("cron_trigger", { task_id: taskId });
+}
+
+/** Group the agent's schedules by conversation id — powers the per-conversation
+ *  monitor badge (an active schedule attached to THIS chat). */
+export async function schedulesByConversation(agentId: string): Promise<
+  Record<string, Array<{ id: string; name: string; status?: string }>>
+> {
+  const tasks = await listSchedules(agentId);
+  const byConv: Record<string, Array<{ id: string; name: string; status?: string }>> = {};
+  for (const task of tasks) {
+    if (!task.conversation_id) continue;
+    // Badges count LIVE schedules only: terminal ones (fired/cancelled/
+    // missed husks) would render a permanent count linking to nothing
+    // alive. Same status field live-probed in #17.
+    if (task.status !== undefined && task.status !== "active" && task.status !== "paused") continue;
+    (byConv[task.conversation_id] ??= []).push({
+      id: task.id,
+      name: task.name,
+      status: task.status,
+    });
   }
-  const body = (await response.json()) as RawScheduleListResponse;
-  if (!Array.isArray(body.scheduled_messages)) {
-    throw new Error("Unexpected schedules response from Letta Cloud.");
-  }
-  return body.scheduled_messages.map(toScheduleSummary);
+  return byConv;
 }

@@ -4,10 +4,7 @@ import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { modelLabel, relativeTime } from "../lib/format";
 import { useAppStore } from "../store";
 import type { ConnectionState, ConversationSummary } from "../types";
-import {
-  CheckIcon,
-  ChevronDownIcon,
-  HomeIcon,
+import { ClockIcon, 
   MemoryIcon,
   MoreIcon,
   PlusIcon,
@@ -23,17 +20,25 @@ const menuItem =
   "flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-sm text-ink-800 outline-none data-[highlighted]:bg-surface-tertiary";
 
 function AgentSwitcher() {
+  // Selection moved to the left AgentRail — this is now an identity card:
+  // current agent's name + model; click opens agent settings. The rail
+  // owns switching; the card owns configuration.
   const agents = useAppStore((state) => state.agents);
   const agentId = useAppStore((state) => state.agentId);
   const models = useAppStore((state) => state.models);
-  const selectAgent = useAppStore((state) => state.selectAgent);
   const setNewAgentOpen = useAppStore((state) => state.setNewAgentOpen);
   const setAgentSettingsOpen = useAppStore((state) => state.setAgentSettingsOpen);
   const current = agents.find((agent) => agent.id === agentId);
 
   return (
-    <DropdownMenu.Root>
-      <DropdownMenu.Trigger className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left hover:bg-ink-900/5 transition-colors outline-none">
+    <div className="flex items-center gap-1.5">
+      <button
+        type="button"
+        disabled={!current}
+        onClick={() => setAgentSettingsOpen(true)}
+        className="flex min-w-0 flex-1 items-center gap-2 rounded-xl px-2.5 py-2 text-left hover:bg-ink-900/5 transition-colors outline-none disabled:cursor-not-allowed disabled:opacity-50"
+        title="Agent settings"
+      >
         <span className="min-w-0 flex-1">
           <span className="block truncate text-sm font-semibold text-ink-900">
             {current?.name ?? "No agent"}
@@ -42,54 +47,37 @@ function AgentSwitcher() {
             {current ? modelLabel(current.model, models) : "Create an agent to begin"}
           </span>
         </span>
-        <ChevronDownIcon className="h-4 w-4 shrink-0 text-muted" />
-      </DropdownMenu.Trigger>
-      <DropdownMenu.Portal>
-        <DropdownMenu.Content className={`${menuContent} w-[256px]`} align="start" sideOffset={6}>
-          <div className="max-h-72 overflow-y-auto">
-            {agents.map((agent) => (
-              <DropdownMenu.Item
-                key={agent.id}
-                className={menuItem}
-                onSelect={() => agent.id !== agentId && void selectAgent(agent.id)}
-              >
-                <span className="w-4 shrink-0">
-                  {agent.id === agentId && <CheckIcon className="h-4 w-4 text-accent" />}
-                </span>
-                <span className="min-w-0">
-                  <span className="block truncate">{agent.name}</span>
-                  <span className="block truncate text-xs text-muted">
-                    {modelLabel(agent.model, models)}
-                  </span>
-                </span>
-              </DropdownMenu.Item>
-            ))}
-          </div>
-          {agents.length > 0 && <DropdownMenu.Separator className="my-1 h-px bg-border" />}
-          {current && (
-            <DropdownMenu.Item className={menuItem} onSelect={() => setAgentSettingsOpen(true)}>
-              <SettingsIcon className="h-4 w-4 shrink-0 text-muted" />
-              Agent settings...
-            </DropdownMenu.Item>
-          )}
-          <DropdownMenu.Item className={menuItem} onSelect={() => setNewAgentOpen(true)}>
-            <PlusIcon className="h-4 w-4 shrink-0 text-muted" />
-            New agent...
-          </DropdownMenu.Item>
-        </DropdownMenu.Content>
-      </DropdownMenu.Portal>
-    </DropdownMenu.Root>
+      </button>
+      <button
+        type="button"
+        onClick={() => setNewAgentOpen(true)}
+        aria-label="New agent"
+        title="New agent"
+        className="shrink-0 rounded-lg p-1.5 text-muted hover:bg-surface-tertiary hover:text-ink-900 transition-colors"
+      >
+        <PlusIcon className="h-4 w-4" />
+      </button>
+    </div>
   );
 }
+
+/** Stable empty — a fresh [] per snapshot re-renders forever (lesson #625). */
+const NO_MONITORS: Array<{ id: string; name: string; status?: string }> = [];
 
 function ConversationItem({
   conversation,
   now,
+  pinned,
+  unread,
+  onTogglePin,
   onRename,
   onResume,
 }: {
   conversation: ConversationSummary;
   now: number;
+  pinned: boolean;
+  unread: boolean;
+  onTogglePin: (conversation: ConversationSummary) => void;
   onRename: (conversation: ConversationSummary) => void;
   onResume: (conversation: ConversationSummary) => void;
 }) {
@@ -97,6 +85,9 @@ function ConversationItem({
     (state) => state.view === "chat" && state.activeId === conversation.id,
   );
   const running = useAppStore((state) => state.chats[conversation.id]?.running ?? false);
+  const monitorSchedules = useAppStore(
+    (state) => state.monitorSchedules[conversation.id] ?? NO_MONITORS,
+  );
   const waiting = useAppStore((state) => (state.chats[conversation.id]?.approvals.length ?? 0) > 0);
   const openChat = useAppStore((state) => state.openChat);
   const archiveConversation = useAppStore((state) => state.archiveConversation);
@@ -111,7 +102,17 @@ function ConversationItem({
         className="flex min-w-0 flex-1 items-center gap-2 py-2 pl-2.5 pr-1 text-left outline-none"
       >
         <span className={`min-w-0 flex-1 truncate text-sm ${active ? "text-ink-900" : "text-ink-800"}`}>
+          {unread && <span className="mr-1 inline-block h-2 w-2 shrink-0 rounded-full bg-accent" title="Unread" />}
+          {pinned && <span className="mr-1 text-accent">★</span>}
           {conversation.title || "New chat"}
+          {monitorSchedules.length > 0 && (
+            <span
+              title={monitorSchedules.map((s) => s.name).join(", ")}
+              className="ml-1.5 inline-flex items-center rounded-full border border-accent/40 px-1.5 py-0.5 text-[10px] font-medium text-accent align-middle"
+            >
+              ● {monitorSchedules.length}
+            </span>
+          )}
         </span>
         {running ? (
           waiting ? (
@@ -134,6 +135,12 @@ function ConversationItem({
         </DropdownMenu.Trigger>
         <DropdownMenu.Portal>
           <DropdownMenu.Content className={menuContent} align="start" sideOffset={6}>
+            <DropdownMenu.Item
+              className={menuItem}
+              onSelect={() => onTogglePin(conversation)}
+            >
+              {pinned ? "Unpin" : "Pin to top"}
+            </DropdownMenu.Item>
             <DropdownMenu.Item className={menuItem} onSelect={() => onRename(conversation)}>
               Rename
             </DropdownMenu.Item>
@@ -264,16 +271,28 @@ function ResumeDialog({
 }
 
 export function Sidebar() {
-  const conversations = useAppStore((state) => state.conversations);
+  const rawConversations = useAppStore((state) => state.conversations);
+  const pinnedConversations = useAppStore((state) => state.pinnedConversations);
+  const readCursors = useAppStore((state) => state.readCursors);
+  const activeId = useAppStore((state) => state.activeId);
+  const markAllRead = useAppStore((state) => state.markAllRead);
+  const togglePinnedConversation = useAppStore((state) => state.togglePinnedConversation);
+  const conversations = [...rawConversations].sort((a, b) => {
+    const pa = pinnedConversations.includes(a.id) ? 0 : 1;
+    const pb = pinnedConversations.includes(b.id) ? 0 : 1;
+    return pa - pb;
+  });
   const conversationsLoaded = useAppStore((state) => state.conversationsLoaded);
+  const conversationsLoading = useAppStore((state) => state.conversationsLoading);
+  const conversationsRefreshing = useAppStore((state) => state.conversationsRefreshing);
   const agentId = useAppStore((state) => state.agentId);
   const connection = useAppStore((state) => state.connection);
   const openChat = useAppStore((state) => state.openChat);
-  const goHome = useAppStore((state) => state.goHome);
   const openMemory = useAppStore((state) => state.openMemory);
+  const openSchedules = useAppStore((state) => state.openSchedules);
+  const schedulesOpen = useAppStore((state) => state.view === "schedules");
   const openSettings = useAppStore((state) => state.openSettings);
   const memoryOpen = useAppStore((state) => state.view === "memory");
-  const homeOpen = useAppStore((state) => state.view === "home");
   const [renaming, setRenaming] = useState<ConversationSummary | null>(null);
   const [resuming, setResuming] = useState<ConversationSummary | null>(null);
   const [now, setNow] = useState(() => Date.now());
@@ -283,6 +302,13 @@ export function Sidebar() {
     const timer = window.setInterval(() => setNow(Date.now()), 60_000);
     return () => window.clearInterval(timer);
   }, []);
+
+  const [query, setQuery] = useState("");
+  const visibleConversations = query.trim()
+    ? conversations.filter((conversation) =>
+        (conversation.title || "New chat").toLowerCase().includes(query.trim().toLowerCase()),
+      )
+    : conversations;
 
   return (
     <aside className="flex w-[272px] shrink-0 flex-col border-r border-border bg-sidebar">
@@ -301,15 +327,6 @@ export function Sidebar() {
         </button>
         <button
           type="button"
-          onClick={goHome}
-          aria-pressed={homeOpen}
-          className={`mt-1 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm transition-colors ${homeOpen ? "bg-ink-900/8 text-ink-900" : "text-ink-800 hover:bg-ink-900/5"}`}
-        >
-          <HomeIcon className="h-4 w-4" />
-          Home
-        </button>
-        <button
-          type="button"
           disabled={!agentId}
           onClick={openMemory}
           aria-pressed={memoryOpen}
@@ -318,18 +335,64 @@ export function Sidebar() {
           <MemoryIcon className="h-4 w-4" />
           Memory
         </button>
+        <button
+          type="button"
+          disabled={!agentId}
+          onClick={openSchedules}
+          aria-pressed={schedulesOpen}
+          className={`mt-1 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${schedulesOpen ? "bg-ink-900/8 text-ink-900" : "text-ink-800 hover:bg-ink-900/5"}`}
+        >
+          <ClockIcon className="h-4 w-4" />
+          Schedules
+        </button>
       </div>
 
+      {conversations.length > 5 && (
+        <div className="mt-3 flex items-center gap-1.5 px-2.5">
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search chats…"
+            className="min-w-0 flex-1 rounded-lg bg-surface-tertiary px-3 py-1.5 text-sm text-ink-900 placeholder:text-muted focus:outline-none"
+          />
+          {Object.values(readCursors).length > 0 && (
+            <button
+              type="button"
+              onClick={markAllRead}
+              title="Mark all conversations as read"
+              className="shrink-0 rounded-lg px-2 py-1.5 text-xs text-muted hover:bg-surface-tertiary hover:text-ink-900"
+            >
+              Mark all read
+            </button>
+          )}
+        </div>
+      )}
+
       <nav className="mt-3 min-h-0 flex-1 overflow-y-auto px-2.5 pb-2">
-        {agentId && conversationsLoaded && conversations.length === 0 && (
+        {agentId && conversationsLoaded && visibleConversations.length === 0 && query.trim() && (
+          <p className="px-2.5 py-3 text-xs text-muted">No chats match "{query.trim()}".</p>
+        )}
+        {agentId && conversationsLoading && (
+          <p className="px-2.5 py-3 text-xs text-muted">Loading chats…</p>
+        )}
+        {agentId && conversationsRefreshing && conversations.length > 0 && (
+          <p className="px-2.5 py-1.5 text-xs text-muted">Loading remaining chats…</p>
+        )}
+        {agentId && !conversationsLoading && conversationsLoaded && conversations.length === 0 && !query.trim() && (
           <p className="px-2.5 py-3 text-xs text-muted">No chats yet.</p>
         )}
         <div className="flex flex-col gap-0.5">
-          {conversations.map((conversation) => (
+          {visibleConversations.map((conversation) => (
             <ConversationItem
               key={conversation.id}
               conversation={conversation}
               now={now}
+              pinned={pinnedConversations.includes(conversation.id)}
+              unread={
+                conversation.id !== activeId &&
+                (readCursors[conversation.id] ?? 0) < conversation.updatedAt
+              }
+              onTogglePin={(item) => togglePinnedConversation(item.id)}
               onRename={setRenaming}
               onResume={setResuming}
             />

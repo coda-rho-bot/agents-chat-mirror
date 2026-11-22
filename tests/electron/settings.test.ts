@@ -1,15 +1,13 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type Settings = typeof import("../../src/electron/libs/settings");
-type Profiles = typeof import("../../src/electron/libs/profiles");
 
 let userData: string;
 let encryptionAvailable: boolean;
 let settings: Settings;
-let profiles: Profiles;
 
 // A stand-in for the OS keychain: reversible, and clearly not the plain text.
 vi.mock("electron", () => ({
@@ -27,7 +25,6 @@ const savedFile = () => readFileSync(join(userData, "settings.json"), "utf8");
 async function restart() {
   vi.resetModules();
   settings = await import("../../src/electron/libs/settings");
-  profiles = await import("../../src/electron/libs/profiles");
 }
 
 beforeEach(async () => {
@@ -49,30 +46,6 @@ beforeEach(async () => {
 afterEach(() => {
   vi.unstubAllEnvs();
   rmSync(userData, { recursive: true, force: true });
-});
-
-describe("env-fallback honesty", () => {
-  it("keeps an explicitly chosen local backend when an env API key appears later", async () => {
-    // The user chose "This computer" first (settings wrote backend: local)...
-    settings.updateSettings({ backend: "local" });
-    // ...then the app is relaunched from an environment carrying a cloud key.
-    vi.stubEnv("LETTA_API_KEY", "sk-env");
-    await restart();
-    expect(settings.getConnectionConfig().backend).toBe("local");
-  });
-
-  it("still infers cloud from the env key when nothing was chosen", async () => {
-    vi.stubEnv("LETTA_API_KEY", "sk-env");
-    await restart();
-    expect(settings.getConnectionConfig().backend).toBe("cloud");
-  });
-
-  it("a stored backend other than local also beats env inference", async () => {
-    settings.updateSettings({ backend: "remote" });
-    vi.stubEnv("LETTA_API_KEY", "sk-env");
-    await restart();
-    expect(settings.getConnectionConfig().backend).toBe("remote");
-  });
 });
 
 describe("backend selection", () => {
@@ -186,190 +159,45 @@ describe("working folders", () => {
   });
 });
 
-describe("profiles", () => {
-  const cloud = (id: string, url = "") => ({
-    id,
-    type: "cloud" as const,
-    name: "Work",
-    url,
-    authMethod: "api_key" as const,
-    createdAt: 1,
-  });
-
-  async function activate(id: string) {
-    await profiles.setActiveProfileId(id);
-    await profiles.loadProfiles();
-  }
-
-  it("derives the connection config from an active cloud profile", async () => {
-    const id = profiles.newProfileId();
-    await profiles.saveProfile(cloud(id, "https://api.example.com"), "sk-1");
-    await activate(id);
-    expect(settings.getConnectionConfig()).toEqual({
-      backend: "cloud",
-      apiKey: "",
-      serverUrl: "",
-      serverToken: "",
-      apiBaseUrl: "https://api.example.com",
-    });
-    expect(settings.getSettings()).toMatchObject({
-      hasApiKey: true,
-      hasServerToken: false,
-      activeProfileId: id,
-      backend: "cloud",
-    });
-  });
-
-  it("derives the connection config from an active remote profile", async () => {
-    const id = profiles.newProfileId();
-    await profiles.saveProfile(
-      { id, type: "remote", name: "Server", url: "ws://127.0.0.1:4500", createdAt: 1 },
-      "tok-1",
-    );
-    await activate(id);
-    expect(settings.getConnectionConfig()).toEqual({
-      backend: "remote",
-      apiKey: "",
-      serverUrl: "ws://127.0.0.1:4500",
-      serverToken: "",
-      apiBaseUrl: "",
-    });
-    expect(settings.getSettings()).toMatchObject({ hasServerToken: true, hasApiKey: false });
-  });
-
-  it("ignores environment variables while a profile is active", async () => {
-    vi.stubEnv("LETTA_API_KEY", "sk-env");
-    const id = profiles.newProfileId();
-    await profiles.saveProfile(cloud(id), "sk-profile");
-    await activate(id);
-    expect(settings.getConnectionConfig()).toMatchObject({ backend: "cloud", apiKey: "" });
-    expect(settings.getSettings().hasApiKey).toBe(true);
-
-    await profiles.deleteProfile(id);
-    await profiles.loadProfiles();
-    expect(settings.getConnectionConfig()).toMatchObject({ apiKey: "sk-env" });
-  });
-
-  it("remembers the selected agent per profile", async () => {
-    const a = profiles.newProfileId();
-    const b = profiles.newProfileId();
-    await profiles.saveProfile(cloud(a), null);
-    await profiles.saveProfile(cloud(b), null);
-
-    await activate(a);
-    settings.updateSettings({ agentId: "agent-a" });
-    await activate(b);
-    expect(settings.getSettings().agentId).toBeNull();
-    await activate(a);
-    expect(settings.getSettings().agentId).toBe("agent-a");
-  });
-
-  it("ignores legacy connection fields while a profile is active", async () => {
-    const id = profiles.newProfileId();
-    await profiles.saveProfile(cloud(id), "sk-1");
-    await activate(id);
-
-    const result = settings.updateSettings({ backend: "local", apiKey: "sk-other" });
-    expect(result.connectionChanged).toBe(false);
-    expect(settings.getConnectionConfig().backend).toBe("cloud");
-
-    settings.updateSettings({ permissionMode: "unrestricted" });
-    expect(settings.getPermissionMode()).toBe("unrestricted");
-  });
-});
-
-describe("legacy migration", () => {
-  /** Write a legacy oauth-credential.bin the way oauth.ts did (mock reverses). */
-  function writeLegacyBin(credential: object) {
-    const json = JSON.stringify({ credential: JSON.stringify(credential) });
-    writeFileSync(
-      join(userData, "oauth-credential.bin"),
-      Buffer.from(json.split("").reverse().join("")),
-    );
-  }
-
-  it("migrates a cloud OAuth sign-in into an active oauth profile", async () => {
-    settings.updateSettings({ backend: "cloud", apiKey: "stale-access-token", agentId: "agent-cloud" });
-    writeLegacyBin({
-      kind: "oauth",
-      accessToken: "at-old",
-      refreshToken: "rt-old",
-      expiresAt: Date.now() + 3_600_000,
-    });
-
-    await settings.migrateLegacySettings();
-    const list = await profiles.listProfiles();
+describe("saved connections", () => {
+  it("saves the current connection, restores it after changes, and deletes it", async () => {
+    await settings.updateSettings({ backend: "cloud", apiBaseUrl: "https://api.example.com", apiKey: "sk-test" });
+    let list = settings.saveCurrentConnection("Work");
     expect(list).toHaveLength(1);
-    expect(list[0]).toMatchObject({
-      type: "cloud",
-      authMethod: "oauth",
-      name: "Letta Cloud",
-      url: "https://api.letta.com",
-    });
-    const id = list[0].id;
-    expect(await profiles.getActiveProfileId()).toBe(id);
-    expect(await profiles.hasSecret(id)).toBe(true);
-    expect(settings.getSettings()).toMatchObject({
-      activeProfileId: id,
-      backend: "cloud",
-      hasApiKey: true,
-      agentId: "agent-cloud",
-    });
+    expect(list[0].name).toBe("Work");
+    expect(list[0].backend).toBe("cloud");
 
-    // Non-destructive: the legacy files survive a failed migration path.
-    expect(savedFile()).toContain("apiKey");
-    expect(readFileSync(join(userData, "oauth-credential.bin"), "utf8")).toBeTruthy();
+    // Diverge the live config.
+    await settings.updateSettings({ backend: "local" });
+    expect(settings.getConnectionConfig().backend).toBe("local");
+
+    // Switching restores the snapshot, including the secret.
+    settings.switchSavedConnection(list[0].id);
+    const config = settings.getConnectionConfig();
+    expect(config.backend).toBe("cloud");
+    expect(config.apiBaseUrl).toBe("https://api.example.com");
+    expect(config.apiKey).toBe("sk-test");
+
+    // Deleting removes the entry and its snapshot blob.
+    list = settings.deleteSavedConnection(list[0].id);
+    expect(list).toHaveLength(0);
+    settings.switchSavedConnection("gone");
+    expect(settings.getConnectionConfig().backend).toBe("cloud"); // unchanged
   });
 
-  it("migrates a stored cloud API key when there is no OAuth credential", async () => {
-    settings.updateSettings({
-      backend: "cloud",
-      apiKey: "sk-old",
-      apiBaseUrl: "https://api.example.com",
-    });
-    await settings.migrateLegacySettings();
-    const [profile] = await profiles.listProfiles();
-    expect(profile).toMatchObject({ type: "cloud", authMethod: "api_key", url: "https://api.example.com" });
-    expect(await profiles.getProfileSecret(profile.id)).toBe("sk-old");
-    expect(settings.getConnectionConfig()).toMatchObject({
-      backend: "cloud",
-      apiBaseUrl: "https://api.example.com",
-    });
+  it("overwrites a same-named connection instead of duplicating", async () => {
+    await settings.updateSettings({ backend: "cloud", apiKey: "sk-one" });
+    settings.saveCurrentConnection("Work");
+    await settings.updateSettings({ backend: "remote", serverUrl: "ws://127.0.0.1:4500" });
+    const list = settings.saveCurrentConnection("Work");
+    expect(list).toHaveLength(1);
+    expect(list[0].backend).toBe("remote");
   });
 
-  it("migrates a remote server connection, token and all", async () => {
-    settings.updateSettings({ backend: "remote", serverUrl: "ws://127.0.0.1:4500", serverToken: "tok" });
-    await settings.migrateLegacySettings();
-    const [profile] = await profiles.listProfiles();
-    expect(profile).toMatchObject({ type: "remote", url: "ws://127.0.0.1:4500", name: "127.0.0.1:4500" });
-    expect(await profiles.getProfileSecret(profile.id)).toBe("tok");
-    expect(settings.getConnectionConfig()).toMatchObject({
-      backend: "remote",
-      serverUrl: "ws://127.0.0.1:4500",
-    });
-  });
-
-  it("migrates nothing for local-only installs, and stays that way", async () => {
-    settings.updateSettings({ backend: "local" });
-    await settings.migrateLegacySettings();
-    expect(await profiles.listProfiles()).toEqual([]);
-    expect(settings.getSettings().activeProfileId).toBeNull();
-
-    // The flag keeps a later "delete everything" deleted.
-    await profiles.saveProfile(
-      { id: profiles.newProfileId(), type: "cloud", name: "Temp", url: "", createdAt: 1 },
-      null,
-    );
-    await profiles.deleteProfile((await profiles.listProfiles())[0].id);
-    await settings.migrateLegacySettings();
-    expect(await profiles.listProfiles()).toEqual([]);
-  });
-
-  it("runs once even across restarts", async () => {
-    settings.updateSettings({ backend: "cloud", apiKey: "sk-old" });
-    await settings.migrateLegacySettings();
-    await restart();
-    await settings.migrateLegacySettings();
-    expect(await profiles.listProfiles()).toHaveLength(1);
+  it("never writes plain secrets into the settings file", async () => {
+    await settings.updateSettings({ backend: "cloud", apiKey: "sk-plainsecret" });
+    settings.saveCurrentConnection("Secrets");
+    const raw = savedFile();
+    expect(raw).not.toContain("sk-plainsecret");
   });
 });

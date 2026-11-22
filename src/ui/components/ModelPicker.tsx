@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { modelLabel } from "../lib/format";
+import { useAppStore } from "../store";
 import type { ModelOption } from "../types";
 import { CheckIcon, ChevronDownIcon } from "./icons";
 
@@ -25,26 +26,39 @@ export function ModelPicker({
   const [query, setQuery] = useState("");
   const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const refreshModels = useAppStore((state) => state.refreshModels);
 
   useEffect(() => {
     if (!open) return;
+    // The list fetched at connect time can be stale: a BYOK provider may have
+    // come up since. Force past the backend's availability cache so the menu
+    // is current whenever it opens; the old list shows until the refresh lands.
+    void refreshModels(true);
     inputRef.current?.focus();
     const onPointerDown = (event: PointerEvent) => {
       if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
     };
     document.addEventListener("pointerdown", onPointerDown);
     return () => document.removeEventListener("pointerdown", onPointerDown);
-  }, [open]);
+  }, [open, refreshModels]);
 
   const results = useMemo(() => {
     const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
-    const matches = terms.length
+    const all = terms.length
       ? models.filter((model) => {
           const haystack = `${model.label} ${model.handle}`.toLowerCase();
           return terms.every((term) => haystack.includes(term));
         })
       : models;
-    return matches.slice(0, MAX_RESULTS);
+    return all.slice(0, MAX_RESULTS);
+  }, [models, query]);
+  const totalMatches = useMemo(() => {
+    const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+    if (!terms.length) return models.length;
+    return models.filter((model) => {
+      const haystack = `${model.label} ${model.handle}`.toLowerCase();
+      return terms.every((term) => haystack.includes(term));
+    }).length;
   }, [models, query]);
 
   const choose = (handle: string) => {
@@ -88,6 +102,11 @@ export function ModelPicker({
             className="w-full rounded-lg bg-surface-tertiary px-3 py-2 text-sm text-ink-900 placeholder:text-muted focus:outline-none"
           />
           <div role="listbox" className="mt-1.5 max-h-72 overflow-y-auto">
+            {totalMatches > results.length && (
+              <div className="px-3 py-1.5 text-center font-mono text-[11px] text-muted">
+                showing {results.length} of {totalMatches} — keep typing to narrow
+              </div>
+            )}
             {results.length === 0 && (
               <div className="px-3 py-4 text-center text-sm text-muted">No models match.</div>
             )}
