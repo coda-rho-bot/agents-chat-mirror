@@ -1,5 +1,5 @@
 import { BrowserWindow, dialog, ipcMain, Notification, shell } from "electron";
-import type { AppEvent, AppRequests } from "./types.js";
+import type { AppEvent, AppRequests, ProfilesResult } from "./types.js";
 import {
   applyPermissionMode,
   archiveConversation,
@@ -11,12 +11,18 @@ import {
   listConversations,
   listConversationsFirstPage,
   loadHistory,
+  listHomeSchedules,
+  listPendingApprovals,
+  listCompletedSinceLastLook,
+  listProblems,
   reconnect,
   renameConversation,
   respondApproval,
   sendMessage,
   stopTurn,
   updateAgent,
+
+  removeQueuedMessage,
 } from "./libs/runtime.js";
 import {
   deleteMemoryFile,
@@ -43,6 +49,34 @@ import { agentRailStatus } from "./libs/agent-status.js";
 import { listMonitors } from "./libs/monitors.js";
 import { intakeFiles } from "./libs/attachments.js";
 import { deleteSchedule, listSchedules, pauseSchedule, resumeSchedule, schedulesByConversation, triggerSchedule } from "./libs/schedules.js";
+import {
+  CLOUD_DEFAULT_URL,
+  deleteProfile as deleteProfileRecord,
+  listProfiles,
+  newProfileId,
+  onProfileSignedOut,
+  profileState,
+  refreshProfiles,
+  saveOAuthProfile,
+  saveProfile as saveProfileRecord,
+  activeProfile,
+  setActiveProfileId,
+  signOutProfile as signOutProfileRecord,
+  getProfileSecret,
+  writeProfiles,
+  type Profile,
+} from "./libs/profiles.js";
+import { signInWithLetta } from "./libs/oauth.js";
+import { testConnection } from "./libs/testConnection.js";
+
+/** Set/clear the account default for new conversations (Angus home).
+ *  Kept here so the renderer's types.ts never type-reaches profiles.js
+ *  (whose pinned core types are electron-only). */
+async function setProfileEnvDefault(selector: import("./types.js").ComputerSelectorField | null): Promise<void> {
+  const profile = activeProfile();
+  if (!profile) return;
+  await saveProfileRecord({ ...profile, computerSelector: selector ?? undefined }, null);
+}
 import {
   clearBrowseCache,
   getDefaultDirectory,
@@ -78,6 +112,21 @@ export function broadcast(event: AppEvent): void {
   showOsNotification(event);
 }
 
+/** One round trip: fresh snapshot + settings, so the UI never mixes states. */
+async function profilesResult(): Promise<ProfilesResult> {
+  await refreshProfiles();
+  return { settings: getSettings(), ...profileState() };
+}
+
+/** "Letta Cloud", then "Letta Cloud 2", 3, ... for repeat sign-ins. */
+async function nextCloudName(): Promise<string> {
+  const names = new Set((await listProfiles()).map((profile) => profile.name));
+  if (!names.has("Letta Cloud")) return "Letta Cloud";
+  for (let count = 2; ; count++) {
+    if (!names.has(`Letta Cloud ${count}`)) return `Letta Cloud ${count}`;
+  }
+}
+
 /**
  * OS notifications for attention-worthy events: approvals requested, turns
  * finished or failed. Skipped when a window is focused (the user is already
@@ -105,12 +154,126 @@ function showOsNotification(event: AppEvent): void {
 
 const handlers: Handlers = {
   getSettings,
+  listProfiles: () => profilesResult(),
+  saveProfile: async (input) => {
+    const type = input.type === "remote" ? "remote" : "cloud";
+    const url = input.url.trim() || (type === "cloud" ? CLOUD_DEFAULT_URL : "");
+    if (type === "remote" && !url) throw new Error("A server URL is required.");
+    const existing = input.id
+      ? (await listProfiles()).find((profile) => profile.id === input.id)
+      : undefined;
+    const profile: Profile = {
+      id: existing?.id ?? newProfileId(),
+      type,
+      name: input.name.trim() || (type === "cloud" ? "Letta Cloud" : "Remote server"),
+      url,
+      // Editing keeps the auth method; new cloud profiles are API-key ones
+      // (OAuth profiles are created by signing in).
+      authMethod: type === "cloud" ? (existing?.authMethod ?? "api_key") : undefined,
+      createdAt: existing?.createdAt ?? Date.now(),
+    };
+    await saveProfileRecord(profile, input.secret?.trim() ? input.secret.trim() : null);
+    const result = await profilesResult();
+    // Editing the active profile may have changed the connection.
+    if (result.activeProfileId === profile.id) void reconnect();
+    return result;
+  },
+  deleteProfile: async (profileId) => {
+    const wasActive = profileState().activeProfileId === profileId;
+    await deleteProfileRecord(profileId);
+    const result = await profilesResult();
+    if (wasActive) void reconnect();
+    return result;
+  },
+  signOutProfile: async (profileId) => {
+    await signOutProfileRecord(profileId);
+    const result = await profilesResult();
+    if (result.activeProfileId === profileId) void reconnect();
+    return result;
+  },
+  setActiveProfile: async (profileId) => {
+    await setActiveProfileId(profileId);
+    if (profileId === null) {
+      // Choosing "This computer" is an explicit backend decision: persist it
+      // so an inherited cloud env key (LETTA_API_KEY) cannot silently flip
+      // the connection back to cloud on the next launch.
+      updateSettings({ backend: "local" });
+    }
+    const result = await profilesResult();
+    void reconnect();
+    return result;
+  },
+  testProfileConnection: async (profileId) => {
+    const profile = (await listProfiles()).find((item) => item.id === profileId);
+    if (!profile) throw new Error("That profile no longer exists.");
+    // OAuth credentials resolve (and refresh if needed) through the same
+    // single-flight path the connection uses; the test never stores anything.
+    const secret = (await getProfileSecret(profileId)) ?? "";
+    const verdict = await testConnection(profile.type, profile.url, secret);
+    // Persist the verdict on the profile — the row shows it as a status dot
+    // (mirrors mobile's lastTest).
+    const profiles = await listProfiles();
+    const index = profiles.findIndex((item) => item.id === profileId);
+    if (index !== -1) {
+      profiles[index] = {
+        ...profiles[index],
+        lastTest: verdict.ok ? "ok" : verdict.reason === "unauthorized" ? "unauthorized" : "unreachable",
+      };
+      await writeProfiles(profiles);
+    }
+    return verdict;
+  },
+  toggleProfilePin: async (profileId) => {
+    const profiles = await listProfiles();
+    const index = profiles.findIndex((item) => item.id === profileId);
+    if (index === -1) throw new Error("That profile no longer exists.");
+    profiles[index] = { ...profiles[index], pinned: !profiles[index].pinned };
+    await writeProfiles(profiles);
+    return profilesResult();
+  },
+  oauthSignIn: async (profileId) => {
+    try {
+      const credential = await signInWithLetta();
+      const existing = profileId
+        ? (await listProfiles()).find((profile) => profile.id === profileId)
+        : undefined;
+      const profile: Profile = existing
+        ? { ...existing, type: "cloud", authMethod: "oauth" }
+        : {
+            id: newProfileId(),
+            type: "cloud",
+            name: await nextCloudName(),
+            url: CLOUD_DEFAULT_URL,
+            authMethod: "oauth",
+            createdAt: Date.now(),
+          };
+      await saveOAuthProfile(profile, credential);
+      await setActiveProfileId(profile.id);
+      const result = await profilesResult();
+      void reconnect();
+      const summary = result.profiles.find((item) => item.id === profile.id);
+      if (!summary) throw new Error("Sign-in completed but the profile is missing.");
+      return { ok: true as const, profile: summary, ...result };
+    } catch (error) {
+      return { ok: false as const, error: describeError(error) };
+    }
+  },
+  setProfileEnvDefault: async (selector) => {
+    await setProfileEnvDefault(selector);
+    return profilesResult();
+  },
+  listHomeSchedules,
+  listPendingApprovals,
+  listCompletedSinceLastLook,
+  listProblems,
   listComputers: () => listComputers(),
   getConversationEnv,
   getAllConversationEnvs,
   setConversationEnv: (input) => setConversationEnv(input.conversationId, input.selector),
   agentRailStatus: (input) => agentRailStatus(input.agentId),
   listMonitors: (input) => listMonitors(input.conversationId),
+  removeQueuedMessage,
+
   getAgentLayout: () => ({ order: load().agentOrder ?? [], pinned: load().pinnedAgents ?? [] }),
   setAgentLayout: (input) => {
     save({ ...load(), agentOrder: input.order, pinnedAgents: input.pinned });
@@ -297,6 +460,9 @@ export function registerIpc(): void {
   onRemoteAuthChange((auth) => broadcast({ type: "remote_auth", auth }));
   onAdoptionChange((adoption) => broadcast({ type: "remote_adoption", adoption }));
   onHandoverChange((handover) => broadcast({ type: "remote_handover", handover }));
+  // OAuth refresh refusing twice clears the credential — the renderer must
+  // tell the user to sign in again (Angus profile.signed-out).
+  onProfileSignedOut((profileId) => broadcast({ type: "profile.signed-out", profileId }));
   for (const [name, handler] of Object.entries(handlers)) {
     ipcMain.handle(`app:${name}`, async (event, ...args: unknown[]) => {
       // Errors cross the bridge as data so the renderer sees the real message

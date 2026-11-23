@@ -224,6 +224,7 @@ export function getSettings(): AppSettings {
     hasServerToken: config.serverToken.length > 0,
     permissionMode: stored.permissionMode ?? "standard",
     agentId: stored.agentIds?.[config.backend] ?? null,
+    activeProfileId: null,
     lastConversationByAgent: stored.lastConversationByAgent ?? {},
     recentCwds: stored.recentCwds ?? [],
     defaultCwd: homedir(),

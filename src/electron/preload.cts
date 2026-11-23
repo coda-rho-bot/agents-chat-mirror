@@ -50,6 +50,7 @@ const METHODS = [
   "reconnect",
   "listAgents",
   "listSchedules",
+  "listHomeSchedules",
   "listPendingApprovals",
   "listCompletedSinceLastLook",
   "listProblems",

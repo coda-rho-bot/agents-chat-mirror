@@ -16,6 +16,7 @@ const settings: AppSettings = {
   apiBaseUrl: "",
   hasApiKey: false,
   hasServerToken: false,
+  activeProfileId: null,
   permissionMode: "standard",
   agentId: "agent-2", lastConversationByAgent: {},
   recentCwds: ["/recent"],
@@ -114,6 +115,20 @@ function createBridge() {
     agentRailStatus: vi.fn().mockResolvedValue({ agentId: "", latestAt: null, latestConversationId: null }),
     schedulesByConversation: vi.fn().mockResolvedValue({}),
     listMonitors: vi.fn().mockResolvedValue([]),
+    listProfiles: vi.fn().mockResolvedValue({ settings, profiles: [], activeProfileId: null }),
+    saveProfile: vi.fn().mockResolvedValue({ settings, profiles: [], activeProfileId: null }),
+    deleteProfile: vi.fn().mockResolvedValue({ settings, profiles: [], activeProfileId: null }),
+    signOutProfile: vi.fn().mockResolvedValue({ settings, profiles: [], activeProfileId: null }),
+    testProfileConnection: vi.fn().mockResolvedValue({ ok: true, detail: "ok" }),
+    toggleProfilePin: vi.fn().mockResolvedValue({ settings, profiles: [], activeProfileId: null }),
+    setActiveProfile: vi.fn().mockResolvedValue({ settings, profiles: [], activeProfileId: null }),
+    oauthSignIn: vi.fn().mockResolvedValue({ ok: true, profile: undefined, settings, profiles: [], activeProfileId: null }),
+    setProfileEnvDefault: vi.fn().mockResolvedValue({ settings, profiles: [], activeProfileId: null }),
+    listHomeSchedules: vi.fn().mockResolvedValue([]),
+    listPendingApprovals: vi.fn().mockResolvedValue([]),
+    listCompletedSinceLastLook: vi.fn().mockResolvedValue([]),
+    listProblems: vi.fn().mockResolvedValue([]),
+    removeQueuedMessage: vi.fn().mockResolvedValue(undefined),
   } satisfies Record<keyof AppBridge, unknown>;
 }
 
@@ -389,7 +404,8 @@ describe("agents", () => {
     useAppStore.setState({ activeId: "conv-1", view: "memory" });
 
     await state().deleteAgent();
-    expect(state()).toMatchObject({ agentId: null, activeId: null, view: "chat", conversations: [] });
+    // No agents to chat with — home is the honest landing (Angus semantics).
+    expect(state()).toMatchObject({ agentId: null, activeId: null, view: "home", conversations: [] });
   });
 
   it("replaces the agent in the list after an update", async () => {

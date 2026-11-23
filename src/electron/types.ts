@@ -27,6 +27,7 @@ export type AppSettings = {
   agentId: string | null;
   /** Agent id -> last-open conversation id. */
   lastConversationByAgent: Record<string, string>;
+  activeProfileId: string | null;
   recentCwds: string[];
   defaultCwd: string;
 };
@@ -166,6 +167,8 @@ export type ChatTextRow = {
   text: string;
   /** Correlates an optimistic user row with the message Letta persists. */
   otid?: string;
+  /** Images sent with this row — present on user rows only. */
+  images?: AttachmentView[];
 };
 
 export type ChatToolRow = {
@@ -229,11 +232,16 @@ export type AppEvent =
   | { type: "turn.rows"; conversationId: string; rows: ChatRow[] }
   | { type: "turn.rows.removed"; conversationId: string; keys: string[] }
   | { type: "turn.activity"; conversationId: string; activity: string | null }
+  | { type: "turn.queue"; conversationId: string; queue: QueuedItem[] }
   | { type: "turn.finished"; conversationId: string; error?: string }
   | { type: "approval.requested"; conversationId: string; agentId?: string; request: ApprovalRequest }
   | { type: "approval.resolved"; conversationId: string; requestId: string }
   | { type: "conversation.updated"; conversation: ConversationSummary }
+  | { type: "profile.signed-out"; profileId: string }
   | { type: "menu"; command: "new-chat" | "settings" };
+
+/** A queued follow-up, from the server's queue_update frames. */
+export type QueuedItem = { id: string; text: string };
 
 /** Renderer -> main requests. Every method is an `ipcRenderer.invoke` round trip. */
 export type ExecutionMode = "local" | "remote-env" | "cloud-only";
@@ -242,10 +250,34 @@ export type RemoteEnvStatus = { running: boolean; effectiveName: string | null; 
 
 export type AppRequests = {
   getSettings(): AppSettings;
+  /** Connection profiles; the built-in local connection is not in this list. */
+  listProfiles(): ProfilesResult;
+  saveProfile(input: ProfileSave): ProfilesResult;
+  deleteProfile(profileId: string): ProfilesResult;
+  signOutProfile(profileId: string): ProfilesResult;
+  /** Run a real connection test (cloud REST / remote WS) against a profile's stored credential. */
+  testProfileConnection(profileId: string): Promise<TestResult>;
+  /** Toggle a profile's pinned flag (pinned sorts first). */
+  toggleProfilePin(profileId: string): Promise<ProfilesResult>;
+  /** null switches to the built-in local connection. */
+  setActiveProfile(profileId: string | null): ProfilesResult;
+  /** Sign in with Letta; targets an existing profile or creates a new one. */
+  oauthSignIn(profileId?: string): OAuthSignInResult;
+  /** Set/clear the account default for new conversations. */
+  setProfileEnvDefault(selector: ComputerSelectorField | null): ProfilesResult;
+  /** Scheduled messages across the account's agents (home "Next scheduled"). */
+  listHomeSchedules(): Promise<ScheduleSummary[]>;
+  /** §2.6 probe: approvals pending on the runtime with no live turn here. */
+  listPendingApprovals(): Promise<HomeProbedApproval[]>;
+  /** §3.1 outcomes newer than each conversation's app-owned read cursor. */
+  listCompletedSinceLastLook(): Promise<CompletedRow[]>;
+  /** Observed run failures via the D2 steps module, newest first. */
+  listProblems(): Promise<ProblemRow[]>;
   listComputers(): ComputerSummary[];
   getConversationEnv(conversationId: string): ConversationEnv;
   getAllConversationEnvs(): Record<string, ComputerSelectorField | null>;
   getAgentLayout(): { order: string[]; pinned: string[] };
+  removeQueuedMessage(conversationId: string, itemId: string): void;
   listMonitors(input: { conversationId: string }): Array<{ id: string; description: string | null; status: string | null; kind: string | null }> | Array<{ id: string; description: string; status: "unavailable"; kind: "error" }>;
   agentRailStatus(input: { agentId: string }): Promise<{ agentId: string; latestAt: string | null; latestConversationId: string | null }>;
   setAgentLayout(input: { order: string[]; pinned: string[] }): { order: string[]; pinned: string[] };
@@ -340,3 +372,118 @@ export type AppBridge = {
   onEvent(listener: (event: AppEvent) => void): () => void;
   platform: string;
 };
+
+
+// --- Angus-only feature types (restored post-merge; union resolution) ---
+export type ProfileSummary = {
+  id: string;
+  name: string;
+  type: "cloud" | "remote";
+  /** Cloud: API base URL. Remote: WebSocket URL. */
+  url: string;
+  authMethod: "oauth" | "api_key" | null;
+  hasCredential: boolean;
+  /** Cloud only: the environment new conversations route to. */
+  computerSelector?: ComputerSelectorField;
+  /** Result of the last "Test connection" run (mirrors mobile). */
+  lastTest?: "ok" | "unauthorized" | "unreachable";
+  /** Pinned profiles sort to the top of the list (mirrors mobile). */
+  pinned: boolean;
+};
+export type HomeProbedApproval = {
+  conversationId: string;
+  /** Owning agent (probe-relay attribution; optional for shape compatibility). */
+  agentId?: string | null;
+  request: ApprovalRequest;
+  /** When the probe observed it (ms epoch). */
+  receivedAt: number;
+};
+export type HomeSectionState<Row> = {
+  status: "loading" | "ready" | "error";
+  rows: Row[];
+  provenance: Provenance | null;
+  error: string | null;
+};
+export type CompletedRow = {
+  conversationId: string;
+  agentId: string;
+  /** The latest new assistant message (one row per conversation, §3.1). */
+  messageId: string;
+  /** Best-effort text of that outcome. */
+  preview: string;
+  /** Server-side date (ISO) of that outcome. */
+  completedAt: string;
+};
+
+export type AttachmentView = {
+  id: string;
+  name: string;
+  data: string;
+  mediaType: "image/jpeg";
+  width: number;
+  height: number;
+};
+
+
+export type ScheduleSummary = {
+  id: string;
+  agentId: string;
+  /** Best-effort first-message text; empty when the shape is unexpected. */
+  promptPreview: string;
+  /** ISO time of the next fire; null when the server has not computed one. */
+  nextScheduledTime: string | null;
+  kind: "one-time" | "recurring";
+  cronExpression: string | null;
+};
+export type ProblemRow = {
+  agentId: string;
+  stepId: string;
+  errorType: string | null;
+  stopReason: string | null;
+  /** The surface that initiated the failed step, when reported. */
+  origin: string | null;
+  /** Server-side date (ISO) of the failed step. */
+  failedAt: string;
+};
+
+export type HomeState = {
+  agents: HomeSectionState<AgentSummary>;
+  schedules: HomeSectionState<ScheduleSummary>;
+  /** Probed approvals; live approvals flow reactively via chat state. */
+  needsYou: HomeSectionState<HomeProbedApproval>;
+  /** Material outcomes newer than each conversation's read cursor. */
+  completed: HomeSectionState<CompletedRow>;
+  /** Observed run failures (steps), newest first. */
+  problems: HomeSectionState<ProblemRow>;
+};
+
+export type Provenance = {
+  /** live: SDK stream surface; rest: direct cloud REST; cached: stored result. */
+  source: "live" | "rest" | "cached";
+  /** When the fetch completed (ms epoch). */
+  fetchedAt: number;
+};
+
+export type ProfileSave = {
+  /** Omitted (or unknown) creates a new profile. */
+  id?: string;
+  type: "cloud" | "remote";
+  name: string;
+  url: string;
+  secret?: string;
+};
+
+
+export type ProfilesResult = {
+  settings: AppSettings;
+  profiles: ProfileSummary[];
+  activeProfileId: string | null;
+};
+
+export type TestResult =
+  | { ok: true; detail: string }
+  | { ok: false; reason: "unauthorized" | "unreachable" | "invalid_url"; detail: string };
+
+export type OAuthSignInResult =
+  | ({ ok: true; profile: ProfileSummary } & ProfilesResult)
+  | { ok: false; error: string };

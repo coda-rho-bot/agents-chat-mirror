@@ -6,7 +6,7 @@ type Store = typeof import("../../src/ui/store");
 const settings: AppSettings = {
   backend: "local", serverUrl: "", apiBaseUrl: "", hasApiKey: false, hasServerToken: false,
   activeProfileId: null,
-  permissionMode: "standard", agentId: "agent-2", recentCwds: ["/recent"], defaultCwd: "/home",
+  permissionMode: "standard", agentId: "agent-2", lastConversationByAgent: {}, recentCwds: ["/recent"], defaultCwd: "/home",
 };
 const agents: AgentSummary[] = [
   { id: "agent-1", name: "One", description: null, model: "p/one" },
@@ -35,6 +35,7 @@ beforeEach(async () => {
     reconnect: vi.fn(),
     listAgents: vi.fn(async () => agents),
     listSchedules: vi.fn(async () => []),
+    listHomeSchedules: vi.fn(async () => []),
     listPendingApprovals: vi.fn(async () => []),
     listCompletedSinceLastLook: vi.fn(async () => []),
     listProblems: vi.fn(async () => []),
@@ -47,6 +48,14 @@ beforeEach(async () => {
     listConversations: vi.fn().mockResolvedValue([]),
     sendMessage: vi.fn(async () => conversation("conv-1")),
     listProfiles: vi.fn(async () => ({ settings, profiles: [], activeProfileId: null })),
+    // The merged store's remote-env machinery fires on bootstrap/ready.
+    getRemoteAdoption: vi.fn(async () => ({ kind: "none" })),
+    getRemoteHandover: vi.fn(async () => ({ phase: "stable" })),
+    listComputers: vi.fn(async () => []),
+    getReadCursors: vi.fn(async () => ({})),
+    getPinnedConversations: vi.fn(async () => []),
+    getAllConversationEnvs: vi.fn(async () => ({})),
+    getExecutionMode: vi.fn(async () => "local"),
   } as unknown as AppBridge;
   vi.stubGlobal("window", { bridge });
   vi.stubGlobal("crypto", { randomUUID: () => "otid-1" });

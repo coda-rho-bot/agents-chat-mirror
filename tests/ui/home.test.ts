@@ -20,6 +20,7 @@ const settings: AppSettings = {
   activeProfileId: null,
   permissionMode: "standard",
   agentId: null,
+  lastConversationByAgent: {},
   recentCwds: [],
   defaultCwd: "/home",
 };
@@ -94,7 +95,7 @@ function createBridge() {
     getConnection: vi.fn(async () => ({ status: "connecting", backend: "local" })),
     reconnect: vi.fn(),
     listAgents: vi.fn(async () => agents),
-    listSchedules: vi.fn(async () => schedules),
+    listHomeSchedules: vi.fn(async () => schedules),
     listPendingApprovals: vi.fn(async () => probedApprovals),
     listCompletedSinceLastLook: vi.fn(async () => completedRows),
     listProblems: vi.fn(async () => problemRows),
@@ -104,6 +105,14 @@ function createBridge() {
       profiles: [profile],
       activeProfileId: "p-1",
     })),
+    // The merged store's remote-env machinery also fires on ready.
+    getRemoteAdoption: vi.fn(async () => ({ kind: "none" })),
+    getRemoteHandover: vi.fn(async () => ({ phase: "stable" })),
+    listComputers: vi.fn(async () => []),
+    getReadCursors: vi.fn(async () => ({})),
+    getPinnedConversations: vi.fn(async () => []),
+    getAllConversationEnvs: vi.fn(async () => ({})),
+    getExecutionMode: vi.fn(async () => "local"),
   };
 }
 
@@ -194,7 +203,7 @@ describe("refreshHome", () => {
     await vi.waitFor(() => {
       expect(useAppStore.getState().home.agents.status).toBe("ready");
     });
-    expect(bridge.listSchedules).toHaveBeenCalled();
+    expect(bridge.listHomeSchedules).toHaveBeenCalled();
   });
 
   it("feeds the probe into the Needs-you section", async () => {

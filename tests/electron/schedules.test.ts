@@ -19,7 +19,7 @@ import {
   listAgentSchedules,
   mergeSchedules,
   toScheduleSummary,
-} from "../../src/electron/libs/schedules";
+} from "../../src/electron/libs/homeSections";
 import type { ScheduleSummary } from "../../src/electron/types";
 import { activeProfile, getProfileSecret } from "../../src/electron/libs/profiles.js";
 

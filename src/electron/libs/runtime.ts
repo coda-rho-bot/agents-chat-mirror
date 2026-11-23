@@ -17,9 +17,13 @@ import type {
   ApprovalDecision,
   ApprovalRequest,
   ChatRow,
+  CompletedRow,
   ConnectionState,
   ConversationSummary,
   HistoryResult,
+  HomeProbedApproval,
+  ProblemRow,
+  ScheduleSummary,
   SendMessageInput,
 } from "../types.js";
 import { startAppServer, type AppServerHandle } from "./app-server.js";
@@ -36,8 +40,14 @@ import {
   rememberCwd,
   setAgentId,
 } from "./settings.js";
-import { describeError, mergeHistory, projectHistory, toChatRow } from "./transcript.js";
+import { describeError, historyOtids, mergeHistory, projectHistory, toChatRow } from "./transcript.js";
 import { wireContent, type AttachmentView } from "./attachments.js";
+import { activeProfile, kv } from "./profiles.js";
+import { listAgentSchedules, mergeSchedules } from "./homeSections.js";
+import { probeConversation } from "./pendingApprovals.js";
+import { listAgentProblems } from "./steps.js";
+import { newOutcomesSince, toCompletedRow } from "./completed.js";
+import { readCursor, writeCursor } from "./readCursors.js";
 
 /**
  * Everything that talks to Letta: the SDK client, agent and conversation
@@ -87,6 +97,9 @@ let connecting: Promise<LettaAgentClient> | null = null;
 let connection: ConnectionState = { status: "connecting", backend: "local" };
 
 const turns = new Map<string, Turn>();
+/** Staged attachments per optimistic-turn otid — images the next user row
+ *  carries (Angus send path); pruned when history covers the otid. */
+const pendingAttachments = new Map<string, AttachmentView[]>();
 const conversations = new Map<string, ConversationSummary>();
 
 export function initRuntime(emitter: (event: AppEvent) => void): void {
@@ -307,6 +320,124 @@ export async function listAgents(): Promise<AgentSummary[]> {
   const agents = await sdk.agents.list({ limit: 100 });
   return agents.map(toAgentSummary);
 }
+
+// --- Angus home sections ------------------------------------------------------
+
+/** Scheduled messages across the account's agents, soonest first (home). */
+export async function listHomeSchedules(): Promise<ScheduleSummary[]> {
+  const agents = await listAgents();
+  const perAgent = await Promise.all(agents.map((agent) => listAgentSchedules(agent.id)));
+  return mergeSchedules(perAgent);
+}
+
+/** Probe cost bound: most recent conversation per agent, at most this many. */
+const PROBE_AGENT_CAP = 20;
+
+/**
+ * §2.6 probe: approvals pending on the runtime with no live turn in this
+ * client. Live turns' approvals already flow through events; the probe
+ * covers the rest (another client's session, or a turn this client lost).
+ * Sequential on purpose — each probe attaches a session briefly, and a
+ * reconnect burst of 20 simultaneous sessions would be antisocial.
+ * Total probe failure throws (honest section error); partial failure
+ * stays honest-partial.
+ */
+export async function listPendingApprovals(): Promise<HomeProbedApproval[]> {
+  const sdk = await ensureClient();
+  const agents = (await listAgents()).slice(0, PROBE_AGENT_CAP);
+  const found: HomeProbedApproval[] = [];
+  let failures = 0;
+  for (const agent of agents) {
+    const conversations = await listConversations(agent.id);
+    const latest = conversations[0];
+    if (!latest || turns.has(latest.id)) continue;
+    try {
+      // Tag the owning agent: the P4 probe-relay attributes each approval
+      // to its agent for the service's ingestion contract.
+      for (const probed of await probeConversation(sdk, latest.id)) {
+        found.push({ ...probed, agentId: agent.id });
+      }
+    } catch {
+      failures += 1;
+    }
+  }
+  if (failures > 0 && found.length === 0 && agents.length > 0) {
+    throw new Error("Could not check pending approvals — the runtime did not respond.");
+  }
+  return found;
+}
+
+/** Home scan bound: at most this many agents get per-conversation scans. */
+const SCAN_AGENT_CAP = 20;
+
+/**
+ * "Completed since you last looked" (§3.1/§3.2): material outcomes only,
+ * one row per conversation, newer than that conversation's read cursor.
+ * A conversation with no cursor gets its BASELINE established (cursor =
+ * newest message) and surfaces nothing — the first sync never floods the
+ * home with the historical backlog. Unchanged conversations are pruned by
+ * the cursor's server-side date before any message fetch.
+ */
+export async function listCompletedSinceLastLook(): Promise<CompletedRow[]> {
+  const profile = activeProfile();
+  if (!profile) return [];
+  const sdk = await ensureClient();
+  const store = kv();
+  const agents = (await listAgents()).slice(0, SCAN_AGENT_CAP);
+  const rows: CompletedRow[] = [];
+  for (const agent of agents) {
+    const conversations = await listConversations(agent.id);
+    for (const conversation of conversations) {
+      const cursor = await readCursor(store, profile.id, conversation.id);
+      if (!cursor) {
+        await markConversationReadAtLatest(conversation.id);
+        continue;
+      }
+      if (cursor.serverAt && conversation.updatedAt <= Date.parse(cursor.serverAt)) continue;
+      const page = await sdk.conversations.listMessages(conversation.id, { limit: 10, order: "desc" });
+      const row = toCompletedRow(
+        conversation.id,
+        agent.id,
+        newOutcomesSince(page.messages, cursor.messageId),
+      );
+      if (row) rows.push(row);
+    }
+  }
+  return rows.sort((a, b) => b.completedAt.localeCompare(a.completedAt));
+}
+
+/**
+ * "Problems" (§3.4): observed run failures via the D2 steps module — the
+ * latest failed step per agent, newest first. Missed schedules and
+ * delivery failures are not derivable from the surveyed surfaces (see
+ * steps.ts); failed scheduled runs do surface, since scheduled messages
+ * execute through the same pipeline and leave steps.
+ */
+export async function listProblems(): Promise<ProblemRow[]> {
+  const agents = (await listAgents()).slice(0, SCAN_AGENT_CAP);
+  const perAgent = await Promise.all(agents.map((agent) => listAgentProblems(agent.id)));
+  return perAgent
+    .filter((row): row is ProblemRow => row !== null)
+    .sort((a, b) => b.failedAt.localeCompare(a.failedAt));
+}
+
+/**
+ * Advance the conversation's read cursor to its newest message (§3.3).
+ * The cursor is app-owned (profiles.json kv, keyed by profile), never
+ * agent memory.
+ */
+export async function markConversationReadAtLatest(conversationId: string): Promise<void> {
+  const profile = activeProfile();
+  if (!profile) return;
+  const sdk = await ensureClient();
+  const page = await sdk.conversations.listMessages(conversationId, { limit: 1, order: "desc" });
+  const latest = page.messages[0];
+  await writeCursor(kv(), profile.id, conversationId, {
+    messageId: latest?.id ?? null,
+    serverAt: latest?.date ?? null,
+  });
+}
+
 
 export async function createAgent(input: { name: string; model?: string }): Promise<AgentSummary> {
   const sdk = await ensureClient();
@@ -559,13 +690,22 @@ export async function loadHistory(conversationId: string, limit: number): Promis
   const page = await sdk.conversations.listMessages(conversationId, { limit, order: "desc" });
   const history = projectHistory(page.messages);
   const turn = turns.get(conversationId);
-  return {
-    rows: turn ? mergeHistory(history, turn.accumulator.rows().map(toChatRow)) : history,
+  const result: HistoryResult = {
+    rows: turn ? mergeHistory(history, turn.accumulator.rows().map((row) => stampImages(row))) : history,
     hasMore: page.hasMore ?? page.messages.length >= limit,
     running: Boolean(turn),
     activity: turn?.activity ?? null,
     approvals: turn ? [...turn.approvals.values()].map((pending) => pending.request) : [],
   };
+  // The page is now the durable source for this conversation's images;
+  // otids it covers no longer need their in-memory staging copy.
+  for (const otid of historyOtids(page.messages)) pendingAttachments.delete(otid);
+  return result;
+}
+
+/** A user row carries the attachments staged behind its otid, if any. */
+function stampImages(row: TranscriptRow): ChatRow {
+  return toChatRow(row, row.otid ? pendingAttachments.get(row.otid) : undefined);
 }
 
 // --- Turns ------------------------------------------------------------------
@@ -581,7 +721,7 @@ function flushRows(turn: Turn): void {
   for (const row of turn.accumulator.rows()) {
     if (turn.sent.get(row.key) === row) continue;
     turn.sent.set(row.key, row);
-    changed.push(toChatRow(row));
+    changed.push(stampImages(row));
   }
   if (changed.length > 0) {
     emit({ type: "turn.rows", conversationId: turn.conversationId, rows: changed });
@@ -776,6 +916,9 @@ export async function sendMessage(input: SendMessageInput): Promise<Conversation
   };
   turns.set(conversation.id, turn);
   emit({ type: "turn.started", conversationId: conversation.id, agentId: turn.agentId });
+  if (input.attachments && input.attachments.length > 0) {
+    pendingAttachments.set(input.otid, input.attachments);
+  }
   void runTurn(turn, text, input.otid, input.attachments ?? []);
 
   return conversation;
@@ -819,4 +962,14 @@ export function applyPermissionMode(): void {
   for (const turn of turns.values()) {
     void turn.session.changeDeviceState({ permissionMode }).catch(() => undefined);
   }
+}
+
+
+export async function removeQueuedMessage(conversationId: string, itemId: string): Promise<void> {
+  const turn = turns.get(conversationId);
+  const session = turn?.session;
+  if (!session) return;
+  // Never remove optimistically — the server's next queue_update confirms.
+  // Pending-removal marking is a UI concern once the renderer tracks it.
+  await session.removeQueuedMessage(itemId);
 }

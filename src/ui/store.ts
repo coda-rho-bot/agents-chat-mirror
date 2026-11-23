@@ -13,10 +13,15 @@ import type {
   ChatTextRow,
   ConnectionState,
   ConversationSummary,
+  HomeState,
   MemoryFile,
   ModelOption,
+  ProfileSave,
+  ProfileSummary,
+  ProfilesResult,
   ProviderSummary,
   SettingsUpdate,
+  TestResult,
 } from "./types";
 
 const api = window.bridge;
@@ -73,8 +78,13 @@ export type ChatState = {
   running: boolean;
   activity: string | null;
   error: string | null;
-  approvals: ApprovalRequest[];
+  /** Stamped on receipt so the home cards can show age/staleness. */
+  approvals: StampedApproval[];
+  queue: { id: string; text: string }[];
 };
+
+/** An approval plus when this client learned of it. */
+export type StampedApproval = ApprovalRequest & { receivedAt: number };
 
 export type MemoryState = {
   loading: boolean;
@@ -96,11 +106,24 @@ const EMPTY_CHAT: ChatState = {
   activity: null,
   error: null,
   approvals: [],
+  queue: [],
+};
+
+/** Both home sections start honestly "loading" until their fetch lands. */
+const HOME_INITIAL: HomeState = {
+  agents: { status: "loading", rows: [], provenance: null, error: null },
+  schedules: { status: "loading", rows: [], provenance: null, error: null },
+  needsYou: { status: "loading", rows: [], provenance: null, error: null },
+  completed: { status: "loading", rows: [], provenance: null, error: null },
+  problems: { status: "loading", rows: [], provenance: null, error: null },
 };
 
 type AppState = {
   settings: AppSettings | null;
   connection: ConnectionState | null;
+  /** Connection profiles; the built-in local connection is not in this list. */
+  profiles: ProfileSummary[];
+  profilesLoaded: boolean;
   agents: AgentSummary[];
   agentsLoaded: boolean;
   agentId: string | null;
@@ -147,10 +170,15 @@ type AppState = {
   computersLoading: boolean;
   computersError: string | null;
   envOverrides: Record<string, ComputerSelectorField | null>;
+  /** Environment choice per conversation (read-back mirror of the explicit
+   *  picks — Angus HomeView labels the approval card's target from it). */
+  conversationEnvs: Record<string, { selector: ComputerSelectorField | null | undefined }>;
   /** null until loaded, or when the backend manages providers itself. */
   providers: ProviderSummary[] | null;
   /** What the main area shows for the selected agent. */
-  view: "chat" | "memory" | "schedules";
+  view: "home" | "chat" | "memory" | "schedules";
+  /** The home view's section data (home is the launch view). */
+  home: HomeState;
   memory: MemoryState | null;
   conversations: ConversationSummary[];
   conversationsLoading: boolean;
@@ -179,6 +207,18 @@ type AppState = {
 
   bootstrap: () => Promise<void>;
   handleEvent: (event: AppEvent) => void;
+  /** Internal: apply a profiles round trip to the store. */
+  applyProfiles: (result: ProfilesResult) => void;
+  loadProfiles: () => Promise<void>;
+  /** Run a connection test against a profile's stored credential; the row shows the verdict. */
+  testProfileConnection: (profileId: string) => Promise<TestResult>;
+  toggleProfilePin: (profileId: string) => Promise<void>;
+  switchProfile: (profileId: string | null) => Promise<void>;
+  saveProfile: (input: ProfileSave) => Promise<void>;
+  deleteProfile: (profileId: string) => Promise<void>;
+  signOutProfile: (profileId: string) => Promise<void>;
+  /** Sign in with Letta; targets an existing profile or creates a new one. */
+  oauthSignIn: (profileId?: string) => Promise<ProfileSummary>;
   refreshAgents: () => Promise<void>;
   refreshModels: (force?: boolean) => Promise<void>;
   selectAgent: (agentId: string) => Promise<void>;
@@ -186,10 +226,25 @@ type AppState = {
   updateAgent: (update: AgentUpdate) => Promise<AgentSummary>;
   deleteAgent: () => Promise<void>;
   openChat: (conversationId: string | null) => void;
+  /** One tap behind every home row that has no conversation of its own. */
+  openAgentLatest: (agentId: string) => Promise<void>;
+  /** Show the home view (the launch view). */
+  goHome: () => void;
+  /** Load the home's live sections; each records its own provenance. */
+  refreshHome: () => Promise<void>;
+  /** Load one conversation's environment choice into the mirror. */
+  loadConversationEnv: (conversationId: string) => Promise<void>;
   loadHistory: (conversationId: string, limit?: number) => Promise<void>;
   send: (text: string) => Promise<void>;
   stop: () => void;
   respondApproval: (requestId: string, decision: ApprovalDecision) => void;
+  /** Same machinery as respondApproval, for a card that is not the active chat. */
+  respondApprovalFor: (
+    conversationId: string,
+    requestId: string,
+    decision: ApprovalDecision,
+  ) => void;
+  removeQueued: (conversationId: string, itemId: string) => void;
   renameConversation: (conversationId: string, title: string) => Promise<void>;
   archiveConversation: (conversationId: string) => Promise<void>;
   saveSettings: (update: SettingsUpdate) => Promise<void>;
@@ -269,6 +324,7 @@ const CLEARED = {
   computersLoading: false,
   computersError: null,
   envOverrides: {},
+  conversationEnvs: {},
   envCwdOverrides: {},
   remoteHandover: { phase: "stable" },
   pinnedConversations: [],
@@ -281,7 +337,8 @@ const CLEARED = {
   remoteAdoption: { kind: "none" },
   remoteAuth: { status: "idle" },
   providers: null,
-  view: "chat",
+  view: "home",
+  home: HOME_INITIAL,
   memory: null,
   conversations: [],
   conversationsLoading: false,
@@ -295,6 +352,8 @@ const CLEARED = {
 export const useAppStore = create<AppState>((set, get) => ({
   settings: null,
   connection: null,
+  profiles: [],
+  profilesLoaded: false,
   ...CLEARED,
   drafts: {},
   cwdOverrides: {},
@@ -308,8 +367,17 @@ export const useAppStore = create<AppState>((set, get) => ({
   agentSettingsOpen: false,
 
   bootstrap: async () => {
-    const [settings, connection] = await Promise.all([api.getSettings(), api.getConnection()]);
-    set({ settings });
+    // listProfiles returns settings + profiles in one snapshot, so the two
+    // can never disagree about which profile is active.
+    const [profileSnapshot, connection] = await Promise.all([
+      api.listProfiles(),
+      api.getConnection(),
+    ]);
+    set({
+      settings: profileSnapshot.settings,
+      profiles: profileSnapshot.profiles,
+      profilesLoaded: true,
+    });
     get().handleEvent({ type: "connection", state: connection });
     // Close the publish-before-subscribe window: the ready event can fire
     // BETWEEN the snapshot above and this line (subscription is attached
@@ -346,6 +414,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         set({ connection: event.state });
         if (event.state.status === "ready" && previous?.status !== "ready") {
           void get().refreshAgents();
+          void get().refreshHome();
           // Conversation lists can go stale across connection cycles (mode
           // switches swap which registry serves the list). Reload alongside
           // agents on every ready transition.
@@ -417,7 +486,23 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
       case "turn.activity":
         set((state) =>
-          patchChat(state, event.conversationId, () => ({ activity: event.activity })),
+          patchChat(state, event.conversationId, (chat) => ({
+            activity: event.activity,
+            // Server-authoritative "resolved elsewhere": the runtime only
+            // reports Responding (post-tool generation) after every pending
+            // approval of this turn has been resolved — and no new approval
+            // can fire mid-generation. If cards are still up, another client
+            // resolved them; drop them rather than let a dead card linger.
+            approvals:
+              event.activity === "Responding" && chat.approvals.length > 0
+                ? []
+                : chat.approvals,
+          })),
+        );
+        break;
+      case "turn.queue":
+        set((state) =>
+          patchChat(state, event.conversationId, () => ({ queue: event.queue })),
         );
         break;
       case "turn.finished":
@@ -442,7 +527,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           ...patchChat(state, event.conversationId, (chat) => ({
             approvals: [
               ...chat.approvals.filter((item) => item.requestId !== event.request.requestId),
-              event.request,
+              { ...event.request, receivedAt: Date.now() },
             ],
           })),
           // Waiting on a human decision IS unread-worthy. event.agentId is
@@ -496,7 +581,59 @@ export const useAppStore = create<AppState>((set, get) => ({
         if (event.command === "new-chat") get().openChat(null);
         else get().openSettings("connection");
         break;
+      case "profile.signed-out": {
+        const profile = get().profiles.find((item) => item.id === event.profileId);
+        set({
+          notice: `Signed out of ${profile?.name ?? "Letta Cloud"} — sign in again to reconnect.`,
+        });
+        void get().loadProfiles();
+        break;
+      }
     }
+  },
+
+  applyProfiles: (result) => {
+    set({ settings: result.settings, profiles: result.profiles, profilesLoaded: true });
+  },
+
+  loadProfiles: async () => {
+    get().applyProfiles(await api.listProfiles());
+  },
+
+  // The main process reconnects on these; the renderer follows through
+  // `connection` events (agents/conversations clear and reload on ready).
+  testProfileConnection: async (profileId) => {
+    const verdict = await api.testProfileConnection(profileId);
+    // Refresh so the row's status dot reflects the persisted verdict.
+    get().applyProfiles(await api.listProfiles());
+    return verdict;
+  },
+
+  toggleProfilePin: async (profileId) => {
+    get().applyProfiles(await api.toggleProfilePin(profileId));
+  },
+
+  switchProfile: async (profileId) => {
+    get().applyProfiles(await api.setActiveProfile(profileId));
+  },
+
+  saveProfile: async (input) => {
+    get().applyProfiles(await api.saveProfile(input));
+  },
+
+  deleteProfile: async (profileId) => {
+    get().applyProfiles(await api.deleteProfile(profileId));
+  },
+
+  signOutProfile: async (profileId) => {
+    get().applyProfiles(await api.signOutProfile(profileId));
+  },
+
+  oauthSignIn: async (profileId) => {
+    const result = await api.oauthSignIn(profileId);
+    if (!result.ok) throw new Error(result.error);
+    get().applyProfiles(result);
+    return result.profile;
   },
 
   refreshAgents: async () => {
@@ -523,7 +660,8 @@ export const useAppStore = create<AppState>((set, get) => ({
           conversationsLoading: false,
   conversationsRefreshing: false, conversationsLoaded: true,
           activeId: null,
-          view: "chat",
+          // No agents to chat with — home is the honest landing.
+          view: "home",
           memory: null,
         });
       }
@@ -683,6 +821,120 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!conversationId) return;
     const chat = get().chats[conversationId];
     if (!chat?.loaded && !chat?.loading) void get().loadHistory(conversationId);
+    // The environment mirror labels home cards and approval targets.
+    void get().loadConversationEnv(conversationId);
+  },
+
+  openAgentLatest: async (agentId) => {
+    const conversations = await api.listConversations(agentId);
+    if (conversations[0]) get().openChat(conversations[0].id);
+  },
+
+  goHome: () => {
+    set({ view: "home" });
+  },
+
+  refreshHome: async () => {
+    // Each section records its own truth: what it fetched, how, and when.
+    // A failure in one section never blanks the other.
+    const [
+      agentsResult,
+      schedulesResult,
+      approvalsResult,
+      completedResult,
+      problemsResult,
+    ] = await Promise.allSettled([
+      api.listAgents(),
+      api.listHomeSchedules(),
+      api.listPendingApprovals(),
+      api.listCompletedSinceLastLook(),
+      api.listProblems(),
+    ]);
+    const fetchedAt = Date.now();
+    set(() => ({
+      home: {
+        agents:
+          agentsResult.status === "fulfilled"
+            ? {
+                status: "ready",
+                rows: agentsResult.value,
+                provenance: { source: "live", fetchedAt },
+                error: null,
+              }
+            : {
+                status: "error",
+                rows: [],
+                provenance: null,
+                error: errorMessage(agentsResult.reason),
+              },
+        schedules:
+          schedulesResult.status === "fulfilled"
+            ? {
+                status: "ready",
+                rows: schedulesResult.value,
+                provenance: { source: "rest", fetchedAt },
+                error: null,
+              }
+            : {
+                status: "error",
+                rows: [],
+                provenance: null,
+                error: errorMessage(schedulesResult.reason),
+              },
+        needsYou:
+          approvalsResult.status === "fulfilled"
+            ? {
+                status: "ready",
+                rows: approvalsResult.value,
+                provenance: { source: "live", fetchedAt },
+                error: null,
+              }
+            : {
+                status: "error",
+                rows: [],
+                provenance: null,
+                error: errorMessage(approvalsResult.reason),
+              },
+        completed:
+          completedResult.status === "fulfilled"
+            ? {
+                status: "ready",
+                rows: completedResult.value,
+                provenance: { source: "live", fetchedAt },
+                error: null,
+              }
+            : {
+                status: "error",
+                rows: [],
+                provenance: null,
+                error: errorMessage(completedResult.reason),
+              },
+        problems:
+          problemsResult.status === "fulfilled"
+            ? {
+                status: "ready",
+                rows: problemsResult.value,
+                provenance: { source: "rest", fetchedAt },
+                error: null,
+              }
+            : {
+                status: "error",
+                rows: [],
+                provenance: null,
+                error: errorMessage(problemsResult.reason),
+              },
+      },
+    }));
+    // Schedule rows show the configured target's online status; computers
+    // load lazily elsewhere, so a cloud home refresh ensures they are in.
+    if (schedulesResult.status === "fulfilled" && schedulesResult.value.length > 0) {
+      void get().refreshComputers();
+    }
+  },
+
+  loadConversationEnv: async (conversationId) => {
+    const env = await api.getConversationEnv(conversationId);
+    set((state) => ({ conversationEnvs: { ...state.conversationEnvs, [conversationId]: env } }));
   },
 
   loadHistory: async (conversationId, limit) => {
@@ -698,7 +950,10 @@ export const useAppStore = create<AppState>((set, get) => ({
           hasMore: history.hasMore,
           running: history.running,
           activity: history.running ? (chat.activity ?? history.activity) : null,
-          approvals: history.approvals,
+          approvals: history.approvals.map((request) => ({
+            ...request,
+            receivedAt: Date.now(),
+          })),
         })),
       );
     } catch (error) {
@@ -836,6 +1091,25 @@ export const useAppStore = create<AppState>((set, get) => ({
       })),
     );
     void api.respondApproval(activeId, requestId, decision);
+  },
+
+  respondApprovalFor: (conversationId, requestId, decision) => {
+    set((state) =>
+      patchChat(state, conversationId, (chat) => ({
+        approvals: chat.approvals.filter((item) => item.requestId !== requestId),
+      })),
+    );
+    void api.respondApproval(conversationId, requestId, decision);
+  },
+
+  removeQueued: (conversationId, itemId) => {
+    // Optimistic-hide; the server's next queue_update confirms (or restores).
+    set((state) =>
+      patchChat(state, conversationId, (chat) => ({
+        queue: chat.queue.filter((item) => item.id !== itemId),
+      })),
+    );
+    void api.removeQueuedMessage(conversationId, itemId);
   },
 
   renameConversation: async (conversationId, title) => {
