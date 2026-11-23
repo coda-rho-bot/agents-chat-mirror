@@ -3,7 +3,7 @@ import {
   saveConversationEnv as coreSave,
 } from "@angus/letta-client-core";
 import { LettaAgentClient, type ComputerSelector } from "@letta-ai/letta-agent-sdk";
-import { getConnectionConfig, load } from "./settings.js";
+import { getConnectionConfig } from "./settings.js";
 import { activeProfile, kv, saveProfile } from "./profiles.js";
 import { toComputerSummary } from "@angus/letta-client-core";
 
@@ -67,8 +67,20 @@ export async function listComputers(client?: unknown): Promise<ComputerSummary[]
   }));
 }
 
-export function getAllConversationEnvs(): Record<string, ComputerSelectorField | null> {
-  return { ...(load().conversationEnvs ?? {}) };
+export async function getAllConversationEnvs(): Promise<Record<string, ComputerSelectorField | null>> {
+  // ONE TRUTH: the write path persists to core kv (letta.env.* in
+  // profiles.json); hydration reads the SAME store — never a second map the
+  // writer doesn't update (the two-direction bug this replaces).
+  const store = kv() as ReturnType<typeof import("./kvstore.js").fileKeyValueStore>;
+  const out: Record<string, ComputerSelectorField | null> = {};
+  for (const key of store.listKeys()) {
+    if (!key.startsWith("letta.env.")) continue;
+    const id = key.slice("letta.env.".length);
+    if (!id || id === "new") continue; // NEW_CHAT null pins nothing (mode default rules)
+    const env = await coreLoad(store, id);
+    if (env.selector !== undefined) out[id] = env.selector;
+  }
+  return out;
 }
 
 export async function getConversationEnv(

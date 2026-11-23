@@ -8,7 +8,7 @@ import type { KeyValueStore } from "@angus/letta-client-core";
  * AsyncStorage; the values — profile metadata, active id, migration flag —
  * are plain data, never secrets.
  */
-export function fileKeyValueStore(path: string): KeyValueStore {
+export function fileKeyValueStore(path: string): KeyValueStore & { listKeys(): string[] } {
   const load = (): Record<string, string> => {
     try {
       const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
@@ -22,6 +22,9 @@ export function fileKeyValueStore(path: string): KeyValueStore {
     writeFileSync(path, JSON.stringify(data, null, 2), { mode: 0o600 });
   };
   return {
+    listKeys(): string[] {
+      return Object.keys(load());
+    },
     async get(key) {
       return load()[key] ?? null;
     },

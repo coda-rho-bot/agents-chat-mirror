@@ -888,8 +888,15 @@ export async function sendMessage(input: SendMessageInput): Promise<Conversation
       // computer overrides are only valid on cloud sessions (the SDK rejects
       // them on local/remote clients). In private/local mode execution is
       // this machine's app server by construction — the override is void.
-      ...((sdk as { backend?: string }).backend === "cloud" && input.computer
-        ? { computer: input.computer }
+      // Profile default connects (finding 3): explicit pick wins; absent
+      // pick inherits the profile's computerSelector — the setting now does
+      // what its surface promises.
+      ...((sdk as { backend?: string }).backend === "cloud"
+        ? input.computer
+          ? { computer: input.computer }
+          : activeProfile()?.computerSelector
+            ? { computer: activeProfile()!.computerSelector as import("@letta-ai/letta-agent-sdk").ComputerSelector }
+            : {}
         : {}),
       // Wire accepts "max" (CLI catalog) though the SDK type omits it.
       ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort as import("@letta-ai/letta-agent-sdk").ReasoningEffort } : {}),
