@@ -212,8 +212,9 @@ export type SendMessageInput = {
   otid: string;
   cwd: string;
   model?: string;
-  /** Execution target for this turn: a computer selector (sandbox = omit). */
-  computer?: import("@letta-ai/letta-agent-sdk").ComputerSelector;
+  /** Execution target for this turn: a computer selector, explicit null =
+   *  Cloud Sandbox (distinct from absent = inherit default). */
+  computer?: import("@letta-ai/letta-agent-sdk").ComputerSelector | null;
   /** Reasoning tier for the session target (absent = model default). */
   /** Wire accepts "max" (CLI catalog validator) though the SDK type omits it. */
   reasoningEffort?: import("@letta-ai/letta-agent-sdk").ReasoningEffort | "max";

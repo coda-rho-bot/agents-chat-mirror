@@ -1035,9 +1035,12 @@ export const useAppStore = create<AppState>((set, get) => ({
         otid,
         cwd,
         ...(model ? { model } : {}),
-        // Explicit environment pick: null = cloud sandbox, object = a
-        // registered computer, undefined = the mode's default (omitted).
-        ...(pickedEnv !== undefined ? { computer: pickedEnv ?? undefined } : {}),
+        // Explicit environment pick — TRI-STATE ON THE WIRE: null = cloud
+        // sandbox (travels AS null; the runtime reads it as sandbox, never
+        // inherit), object = a registered computer, undefined = the mode's
+        // default (omitted entirely). The ?? undefined collapse erased
+        // explicit sandbox into inherit — fixed.
+        ...(pickedEnv !== undefined ? { computer: pickedEnv as ComputerSelectorField | null } : {}),
         ...(pickedEffort !== undefined ? { reasoningEffort: pickedEffort } : {}),
       });
       set((current) => ({
