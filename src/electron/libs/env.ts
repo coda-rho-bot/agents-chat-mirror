@@ -1,5 +1,11 @@
+import {
+  loadConversationEnv as coreLoad,
+  saveConversationEnv as coreSave,
+} from "@angus/letta-client-core";
 import { LettaAgentClient, type ComputerSelector } from "@letta-ai/letta-agent-sdk";
-import { getConnectionConfig, load, save, type StoredSettings } from "./settings.js";
+import { getConnectionConfig, load } from "./settings.js";
+import { activeProfile, kv, saveProfile } from "./profiles.js";
+import { toComputerSummary } from "@angus/letta-client-core";
 
 /**
  * Per-conversation execution environment (computer) selection.
@@ -19,11 +25,13 @@ export type ComputerSelectorField = ComputerSelector;
 export type ConversationEnv = { selector: ComputerSelectorField | null | undefined };
 
 export type ComputerSummary = {
-  id: string;
+  id?: string;
   deviceId: string;
   name: string;
   status: "online" | "offline";
-  lastSeenAt: number;
+  lastSeenAt?: number;
+  /** Current online connection lease (null when offline) — the Angus shape. */
+  connectionId?: string | null;
 };
 
 let cloudComputersClient: LettaAgentClient | null = null;
@@ -34,7 +42,12 @@ let cloudComputersClient: LettaAgentClient | null = null;
  * (backend: "local" with harnessBackend: "api"), and the SDK's computers
  * client exists only on a direct cloud client — so this builds one
  * dedicated listing client from the saved cloud credentials. */
-export async function listComputers(): Promise<ComputerSummary[]> {
+export async function listComputers(client?: unknown): Promise<ComputerSummary[]> {
+  // Tests inject a mock client — honor it directly (Angus signature).
+  if (client && typeof (client as { computers?: { list?: unknown } }).computers?.list === "function") {
+    const result = (await (client as { computers: { list: (o: unknown) => Promise<{ computers: unknown[] }> } }).computers.list({ limit: 50 }));
+    return result.computers.map((c) => toComputerSummary(c as Parameters<typeof toComputerSummary>[0])) as unknown as ComputerSummary[];
+  }
   const config = getConnectionConfig();
   if (config.backend !== "cloud") {
     throw new Error("Computers are only available with the Letta Cloud backend.");
@@ -58,28 +71,34 @@ export function getAllConversationEnvs(): Record<string, ComputerSelectorField |
   return { ...(load().conversationEnvs ?? {}) };
 }
 
-export function getConversationEnv(conversationId: string): ConversationEnv {
-  const selector = load().conversationEnvs?.[conversationId];
-  return selector === undefined ? { selector: undefined } : { selector: selector ?? null };
+export async function getConversationEnv(
+  conversationId: string,
+): Promise<ConversationEnv> {
+  return coreLoad(kv(), conversationId);
 }
 
-export function setConversationEnv(
+export async function setConversationEnv(
   conversationId: string,
-  selector: ComputerSelectorField | null | undefined,
-): ConversationEnv {
-  const stored = load();
-  const map = { ...(stored.conversationEnvs ?? {}) };
-  // undefined = inherit; null = explicit sandbox; object = a computer.
-  if (selector === undefined) delete map[conversationId];
-  else map[conversationId] = selector;
-  save({ ...stored, conversationEnvs: map } as StoredSettings);
-  return { selector: map[conversationId] ?? null };
+  selector: ComputerSelectorField | null,
+): Promise<ConversationEnv> {
+  await coreSave(kv(), conversationId, selector);
+  return { selector };
 }
 
 /** The session option: undefined leaves the SDK's default (managed sandbox). */
 export function sessionComputerOption(
-  conversationId: string,
+  conv: ConversationEnv,
+  profileDefault?: ComputerSelectorField,
 ): ComputerSelector | undefined {
-  const env = getConversationEnv(conversationId);
-  return env.selector === null || env.selector === undefined ? undefined : env.selector;
+  const effective = conv.selector === undefined ? profileDefault : conv.selector;
+  return effective === null || effective === undefined ? undefined : effective;
+}
+
+
+export async function setProfileEnvDefault(
+  selector: ComputerSelectorField | null,
+): Promise<void> {
+  const profile = activeProfile();
+  if (!profile) return;
+  await saveProfile({ ...profile, computerSelector: selector ?? undefined }, null);
 }

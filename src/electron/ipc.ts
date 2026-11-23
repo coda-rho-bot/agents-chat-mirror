@@ -269,7 +269,7 @@ const handlers: Handlers = {
   listComputers: () => listComputers(),
   getConversationEnv,
   getAllConversationEnvs,
-  setConversationEnv: (input) => setConversationEnv(input.conversationId, input.selector),
+  setConversationEnv: (input) => setConversationEnv(input.conversationId, input.selector ?? null),
   agentRailStatus: (input) => agentRailStatus(input.agentId),
   listMonitors: (input) => listMonitors(input.conversationId),
   removeQueuedMessage,

@@ -11,7 +11,8 @@ import type { ImageContent, SendMessage } from "@letta-ai/letta-agent-sdk";
  * batch cap of 4, images LEAD the wire content array.
  */
 
-export const MAX_EDGE = 2000;
+import { MAX_EDGE as CORE_MAX_EDGE } from "@angus/letta-client-core";
+export const MAX_EDGE = CORE_MAX_EDGE; // 1600 — the core constant (test contract)
 export const MAX_SOURCE_BYTES = 25 * 1024 * 1024;
 export const MAX_ATTACHMENTS = 4;
 export const JPEG_QUALITY = 80;
@@ -66,9 +67,10 @@ export function toImageContent(attachments: readonly AttachmentView[]): ImageCon
 /** Images LEAD the content array (context before instruction). */
 export function wireContent(text: string, attachments: readonly AttachmentView[]): SendMessage {
   const images = toImageContent(attachments);
-  return images.length
-    ? [...images, { type: "text" as const, text }]
-    : text;
+  // Images-only sends carry NO text part (the Angus contract): an empty
+  // text part is noise the server must reject-or-ignore.
+  if (!images.length) return text;
+  return text ? [...images, { type: "text" as const, text }] : images;
 }
 
 export function intakeFiles(paths: readonly string[]): {
@@ -79,7 +81,7 @@ export function intakeFiles(paths: readonly string[]): {
   const skipped: string[] = [];
   for (const path of paths) {
     if (attachments.length >= MAX_ATTACHMENTS) {
-      skipped.push(`${basename(path)} — over the ${MAX_ATTACHMENTS}-image cap`);
+      skipped.push(`${basename(path)} — over the ${MAX_ATTACHMENTS}-image limit`);
       continue;
     }
     try {
