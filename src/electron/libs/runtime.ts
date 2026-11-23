@@ -888,12 +888,15 @@ export async function sendMessage(input: SendMessageInput): Promise<Conversation
       // computer overrides are only valid on cloud sessions (the SDK rejects
       // them on local/remote clients). In private/local mode execution is
       // this machine's app server by construction — the override is void.
-      // Profile default connects (finding 3): explicit pick wins; absent
-      // pick inherits the profile's computerSelector — the setting now does
-      // what its surface promises.
+      // Profile default connects (finding 3), TRI-STATE-CORRECT: an explicit
+      // object = that computer; explicit null = Cloud Sandbox (never inherits
+      // — sessionComputerOption's tested contract); absent = inherit the
+      // profile's computerSelector.
       ...((sdk as { backend?: string }).backend === "cloud"
-        ? input.computer
-          ? { computer: input.computer }
+        ? input.computer !== undefined
+          ? input.computer !== null
+            ? { computer: input.computer }
+            : {} // explicit sandbox: no computer key = the SDK's sandbox
           : activeProfile()?.computerSelector
             ? { computer: activeProfile()!.computerSelector as import("@letta-ai/letta-agent-sdk").ComputerSelector }
             : {}
