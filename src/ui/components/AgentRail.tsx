@@ -207,14 +207,15 @@ export function AgentRail() {
   if (working && agentId) workingAgents.add(agentId);
   // Belt 2: API-side runs (gate reviews on other agents' own convs, crons,
   // device work) emit NO turn.started to us — but they DO bump agentActivity
-  // via conversation.updated. A very recent unread bump on a NON-selected
-  // agent = that agent is producing output right now = working.
+  // via conversation.updated. A RECENT bump = that agent is producing output
+  // right now = working. Recency ALONE — NOT gated on unread: a read floor
+  // advanced (you read their last output) must not suppress the pulse for
+  // their NEXT output; that suppression made live gate reviews invisible.
   const now = Date.now();
   for (const agent of agents) {
     if (agent.id === agentId) continue; // selected: chat state covers it
     const at = agentActivity[agent.id] ?? 0;
-    const read = agentReadFloors[agent.id] ?? 0;
-    if (at > now - 90_000 && at > read) workingAgents.add(agent.id);
+    if (at > now - 90_000) workingAgents.add(agent.id);
   }
 
   if (agents.length === 0) return null;
