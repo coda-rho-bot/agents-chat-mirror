@@ -113,6 +113,7 @@ android {
             // continuity with existing debug-cert installs.
             if (['PLAY_STORE_FILE', 'PLAY_STORE_PASSWORD', 'PLAY_KEY_ALIAS', 'PLAY_KEY_PASSWORD']
                     .every { project.hasProperty(it) }) {
+                println 'SIGNING MODE: release keystore (Play signing — PLAY_STORE_FILE resolved)'
                 storeFile file(PLAY_STORE_FILE)
                 storePassword PLAY_STORE_PASSWORD
                 keyAlias PLAY_KEY_ALIAS
@@ -123,6 +124,7 @@ android {
                 throw new GradleException(
                     'Play signing requires ALL of PLAY_STORE_FILE, PLAY_STORE_PASSWORD, PLAY_KEY_ALIAS, PLAY_KEY_PASSWORD — only some are set. Unset them all (debug fallback) or set all four.')
             } else {
+                println 'SIGNING MODE: debug fallback (sideload continuity — NOT Play-track safe)'
                 storeFile file('debug.keystore')
                 storePassword 'android'
                 keyAlias 'androiddebugkey'
