@@ -104,15 +104,40 @@ android {
             keyAlias 'androiddebugkey'
             keyPassword 'android'
         }
+        release {
+            // Dedicated release keystore (fleet pattern: ~/.keystores/<app>-release.jks),
+            // driven by project properties PLAY_STORE_FILE/PLAY_STORE_PASSWORD/PLAY_KEY_ALIAS/PLAY_KEY_PASSWORD
+            // (pass via -P flags; note: file() resolves relative to android/app/ and does NOT
+            // expand ~ — PLAY_STORE_FILE must be an absolute path). Falls back to the debug key so
+            // keystore-less builds (local, CI) still produce installable APKs — sideload-channel
+            // continuity with existing debug-cert installs.
+            if (['PLAY_STORE_FILE', 'PLAY_STORE_PASSWORD', 'PLAY_KEY_ALIAS', 'PLAY_KEY_PASSWORD']
+                    .every { project.hasProperty(it) }) {
+                storeFile file(PLAY_STORE_FILE)
+                storePassword PLAY_STORE_PASSWORD
+                keyAlias PLAY_KEY_ALIAS
+                keyPassword PLAY_KEY_PASSWORD
+            } else if (['PLAY_STORE_FILE', 'PLAY_STORE_PASSWORD', 'PLAY_KEY_ALIAS', 'PLAY_KEY_PASSWORD']
+                    .any { project.hasProperty(it) }) {
+                // Partial set — fail at configuration time with a cause a 2am release can read.
+                throw new GradleException(
+                    'Play signing requires ALL of PLAY_STORE_FILE, PLAY_STORE_PASSWORD, PLAY_KEY_ALIAS, PLAY_KEY_PASSWORD — only some are set. Unset them all (debug fallback) or set all four.')
+            } else {
+                storeFile file('debug.keystore')
+                storePassword 'android'
+                keyAlias 'androiddebugkey'
+                keyPassword 'android'
+            }
+        }
     }
     buildTypes {
         debug {
             signingConfig signingConfigs.debug
         }
         release {
-            // Caution! In production, you need to generate your own keystore file.
-            // see https://reactnative.dev/docs/signed-apk-android.
-            signingConfig signingConfigs.debug
+            // Dedicated release keystore when PLAY_STORE_FILE is set (see signingConfigs.release);
+            // debug fallback keeps sideload continuity.
+            signingConfig signingConfigs.release
             def enableShrinkResources = findProperty('android.enableShrinkResourcesInReleaseBuilds') ?: 'false'
             shrinkResources enableShrinkResources.toBoolean()
             minifyEnabled enableMinifyInReleaseBuilds
