@@ -21,9 +21,8 @@ import type {
 import { CLOUD_DEFAULT_URL, type Profile } from "../profiles/profiles";
 import { OAuthTokenError } from "../auth/oauthTokens";
 
-// Re-exported so UI code imports from the app's data module, but the
-// definition is the SDK's — no drift (previously narrowed to low|medium|high,
-// silently hiding none/minimal/xhigh).
+// SDK type re-export (the SDK's own union: low|medium|high|none|minimal|xhigh).
+// Historically this app narrowed it — that hid valid tiers.
 export type { ReasoningEffort };
 
 export interface AgentSummary {
