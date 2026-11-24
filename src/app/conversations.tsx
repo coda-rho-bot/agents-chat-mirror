@@ -42,6 +42,7 @@ import {
   type ConversationActivity,
 } from "../lib/letta/ChatSession";
 import { getSecret, type Profile } from "../lib/profiles/profiles";
+import { getChatMeta, markAllRead, markRead, type ChatMeta } from "../lib/letta/chatMeta";
 import { setStringAsync as copyToClipboard } from "expo-clipboard";
 import { haptic } from "../lib/haptics";
 import { useProfiles } from "../lib/profiles/ProfilesContext";
@@ -89,11 +90,12 @@ function useActivity(conversationId: string): ConversationActivity | null {
   return useSyncExternalStore(subscribeConversationActivity, read);
 }
 
-function ConversationRow({ conversation, preview, running, pinned, onPress, onLongPress }: {
+function ConversationRow({ conversation, preview, running, pinned, unread, onPress, onLongPress }: {
   conversation: ConversationSummary;
   preview?: string | null;
   running?: boolean;
   pinned?: boolean;
+  unread?: boolean;
   onPress: () => void;
   onLongPress: () => void;
 }) {
@@ -115,10 +117,13 @@ function ConversationRow({ conversation, preview, running, pinned, onPress, onLo
     >
       <View style={styles.rowInner}>
         <View style={styles.rowText}>
-          <Text role="bodyEm" numberOfLines={1}>
-            {pinned ? "★ " : ""}
-            {conversation.title}
-          </Text>
+          <View style={styles.titleRow}>
+            {unread ? <View style={[styles.unreadDot, { backgroundColor: colors.accent }]} /> : null}
+            <Text role="bodyEm" numberOfLines={1}>
+              {pinned ? "★ " : ""}
+              {conversation.title}
+            </Text>
+          </View>
           {inProgress ? (
             <View style={styles.runningRow}>
               <ActivityIndicator size="small" color={colors.accent} />
@@ -160,6 +165,7 @@ export default function ConversationsScreen() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
   const [search, setSearch] = useState("");
+  const [chatMeta, setChatMeta] = useState<ChatMeta>({ pinned: [], readCursors: {} });
   const renameSheetRef = useRef<BottomSheetModal>(null);
   const [renaming, setRenaming] = useState<ConversationSummary | null>(null);
   const [draftTitle, setDraftTitle] = useState("");
@@ -305,6 +311,7 @@ export default function ConversationsScreen() {
   const load = useCallback(async () => {
     const profile = activeProfile as Profile | null;
     if (!profile || !agentId) return;
+    void getChatMeta(profile.id).then(setChatMeta);
     setError(null);
     try {
       const secret = (await getSecret(profile.id)) ?? "";
@@ -448,6 +455,9 @@ export default function ConversationsScreen() {
   };
 
   const openChat = (conversation: ConversationSummary) => {
+    if (activeProfile && conversation.lastMessageAt) {
+      void markRead(activeProfile.id, conversation.id, new Date(conversation.lastMessageAt).getTime()).then(setChatMeta);
+    }
     router.push({
       pathname: "/chat",
       params: { conversationId: conversation.id, agentId, agentName, title: conversation.title },
@@ -573,6 +583,27 @@ export default function ConversationsScreen() {
             autoCapitalize="none"
             style={[styles.search, { backgroundColor: colors.surface, borderColor: colors.surfaceEdge, color: colors.ink }]}
           />
+          {filtered.some(
+            (c) => c.lastMessageAt !== undefined &&
+              (chatMeta.readCursors[c.id] ?? 0) < new Date(c.lastMessageAt).getTime(),
+          ) ? (
+            <Touchable
+              accessibilityRole="button"
+              accessibilityLabel="Mark all read"
+              onPress={() => {
+                if (!activeProfile || !conversations) return;
+                void markAllRead(
+                  activeProfile.id,
+                  conversations.map((c) => ({ id: c.id, seenAt: c.lastMessageAt ? new Date(c.lastMessageAt).getTime() : Date.now() })),
+                ).then(setChatMeta);
+              }}
+              style={styles.markAll}
+            >
+              <Text role="sub" tone="accent">
+                Mark all read
+              </Text>
+            </Touchable>
+          ) : null}
         </View>
       ) : null}
       {conversations === null ? (
@@ -587,6 +618,10 @@ export default function ConversationsScreen() {
               preview={previews[item.id]}
               running={runningConvs.has(item.id)}
               pinned={pinned.has(item.id)}
+              unread={
+                item.lastMessageAt !== undefined &&
+                (chatMeta.readCursors[item.id] ?? 0) < new Date(item.lastMessageAt).getTime()
+              }
               onPress={() => openChat(item)}
               onLongPress={() => showActions(item)}
             />
@@ -692,7 +727,7 @@ export default function ConversationsScreen() {
           onSelect={(mode) => void selectAgentNotif(mode)}
         />
         <Text role="sub" ink={3} style={styles.permHint}>
-          Default for this agent's conversations. Individual conversations can override this in the chat.
+          Default for this agent&rsquo;s conversations. Individual conversations can override this in the chat&rsquo;s settings.
         </Text>
 
         <Touchable
@@ -737,7 +772,7 @@ export default function ConversationsScreen() {
           onSelect={(mode) => void selectAgentPerm(mode)}
         />
         <Text role="sub" ink={3} style={styles.permHint}>
-          Default for this agent's conversations. Individual conversations can override this in the chat.
+          Default for this agent&rsquo;s conversations. Individual conversations can override this in the chat&rsquo;s settings.
         </Text>
 
         <Touchable
@@ -941,4 +976,7 @@ const styles = StyleSheet.create({
   },
   sheetAction: { minHeight: 46, borderRadius: radius.row, alignItems: "center", justifyContent: "center" },
   sheetActionLabel: { color: "#FFFFFF" },
+  titleRow: { flexDirection: "row", alignItems: "center", gap: 6 },
+  unreadDot: { width: 8, height: 8, borderRadius: 4 },
+  markAll: { paddingHorizontal: 8, paddingVertical: 4 },
 });

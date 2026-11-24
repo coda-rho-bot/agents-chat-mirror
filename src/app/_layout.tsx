@@ -27,7 +27,9 @@ import { ThemeProvider, useTheme } from "../theme/ThemeProvider";
 function BackgroundPollingLifecycle() {
   const { activeProfile } = useProfiles();
   const profileRef = useRef(activeProfile);
-  profileRef.current = activeProfile;
+  useEffect(() => {
+    profileRef.current = activeProfile;
+  }, [activeProfile]);
 
   useEffect(() => {
     // The poller runs for the app's whole lifetime — foregrounded too — so

@@ -9,20 +9,22 @@
  * see letta-cloud#13382).
  */
 import { LettaAgentClient, createReactNativeWebSocketConstructor } from "@letta-ai/letta-agent-sdk/client";
+import type { Computer } from "@letta-ai/letta-agent-sdk/client";
 import type {
   UpdateConversationOptions,
-  Computer,
   LettaAgent,
   LettaCodeModelEntry,
   LettaConversation,
-  ReasoningEffort as SdkReasoningEffort,
+  ReasoningEffort,
 } from "@letta-ai/letta-agent-sdk/client";
 
 import { CLOUD_DEFAULT_URL, type Profile } from "../profiles/profiles";
-import { OAuthTokenError } from "@angus/letta-client-core";
+import { OAuthTokenError } from "../auth/oauthTokens";
 
-// Re-exported so UI code imports from the app's data module. Definition lives
-// just below (widened with "max" — see the type comment there).
+// Re-exported so UI code imports from the app's data module, but the
+// definition is the SDK's — no drift (previously narrowed to low|medium|high,
+// silently hiding none/minimal/xhigh).
+export type { ReasoningEffort };
 
 export interface AgentSummary {
   id: string;
@@ -36,20 +38,8 @@ export interface AgentSummary {
   lastActive?: string;
 }
 
-/**
- * Reasoning effort, widened with "max" — the model catalog ships "max"
- * variants (claude + gpt-5.6 lines) and the Anthropic model settings accept
- * it, but the SDK's own union omits it.
- */
-export type ReasoningEffort = SdkReasoningEffort | "max";
-
 /** Display projection of the SDK's model entry — same fields, same names. */
-export type ModelOption = Pick<LettaCodeModelEntry, "id" | "handle" | "label"> & {
-  /** Catalog default/variant reasoning effort for this entry, if declared. */
-  effort?: ReasoningEffort;
-  /** Effort tiers the catalog declares supported (reasoning_capabilities.supported_efforts). */
-  supportedEfforts?: ReasoningEffort[];
-};
+export type ModelOption = Pick<LettaCodeModelEntry, "id" | "handle" | "label">;
 
 interface Connection {
   profile: Profile;
@@ -90,17 +80,11 @@ export function isAuthError(e: unknown): boolean {
   return /\b401\b|\b403\b|unauthori[sz]ed|forbidden|invalid (api key|token|credential)|invalid_grant|credentials/i.test(message);
 }
 
-/**
- * Cached portable SDK clients, keyed by (profile id, url, secret).
- *
- * SDK 0.8.39 clients pool a management connection (a persistent WebSocket on
- * the remote backend), so constructing one per call leaks a socket per call
- * site. The secret participates in the key so an OAuth token rotation gets a
- * fresh client naturally — the old one is closed (idempotent, fire-and-forget;
- * sessions own their own sockets and survive an evicted client per the SDK's
- * close() contract). The cache is bounded by the profile count; keys churn
- * only on token rotation or URL edits.
- */
+// SDK 0.8.x clients hold a persistent management WebSocket (remote backend) —
+// constructing one per call site leaks a socket per call. Pool keyed by
+// (profile id, url, secret): OAuth rotation naturally rotates the key, and
+// evicted clients are closed (close() is idempotent in 0.8.39, never rejects).
+// Restored from main per Uncia R2 (PR #7 review).
 const clientCache = new Map<string, LettaAgentClient>();
 
 function cacheKey(conn: Connection): string {
@@ -113,8 +97,7 @@ export function sdkClient(conn: Connection): LettaAgentClient {
   const cached = clientCache.get(key);
   if (cached) return cached;
   const created = createSdkClient(conn);
-  // Evict any stale entry for the same profile (rotated secret/URL) and close
-  // it — close() is idempotent in 0.8.39 and never rejects.
+  // Evict stale entries for the same profile (rotated secret/URL).
   for (const [existingKey, existing] of clientCache) {
     if (existingKey.startsWith(`${conn.profile.id}|`) && existingKey !== key) {
       clientCache.delete(existingKey);
@@ -170,8 +153,6 @@ function toSummary(record: LettaAgent): AgentSummary {
       record.model ??
       (record.llm_config as { model?: string } | undefined)?.model ??
       "—",
-    description: record.description ?? null,
-    lastStopReason: (record.last_stop_reason as string | null | undefined) ?? null,
     lastActive:
       (record.last_run_completion as string | undefined) ?? record.updated_at ?? undefined,
   };
@@ -185,68 +166,6 @@ export async function listAgents(conn: Connection): Promise<AgentSummary[]> {
     order: "desc",
   });
   return records.map(toSummary);
-}
-
-/**
- * One unfiltered sweep of recent runs — the in-progress signal for list
- * screens. Returns which agents and conversations currently have a run
- * in flight. Cost: a single request regardless of fleet size.
- */
-export async function fetchRunActivity(conn: Connection): Promise<{
-  runningAgents: Set<string>;
-  runningConversations: Set<string>;
-}> {
-  const runningAgents = new Set<string>();
-  const runningConversations = new Set<string>();
-  try {
-    const body = (await cloudFetch(conn, "/v1/runs?limit=50")) as Array<{
-      status?: string;
-      agent_id?: string | null;
-      conversation_id?: string | null;
-    }>;
-    for (const run of body) {
-      if (run.status !== "running") continue;
-      if (run.agent_id) runningAgents.add(run.agent_id);
-      if (run.conversation_id) runningConversations.add(run.conversation_id);
-    }
-  } catch {
-    // Activity indicators are decoration — an empty set is the graceful fallback.
-  }
-  return { runningAgents, runningConversations };
-}
-
-/**
- * The agent's latest reply text (newest assistant_message), for list previews.
- * Returns null when the conversation has no assistant messages.
- */
-export async function fetchLastAssistantPreview(
-  conn: Connection,
-  conversationId: string,
-): Promise<string | null> {
-  try {
-    const body = (await cloudFetch(
-      conn,
-      `/v1/conversations/${encodeURIComponent(conversationId)}/messages?limit=6`,
-    )) as Array<{ message_type?: string; date?: string; content?: unknown }>;
-    for (const m of body) {
-      // Newest first; first assistant_message wins.
-      if (m.message_type !== "assistant_message") continue;
-      const content = m.content;
-      const text =
-        typeof content === "string"
-          ? content
-          : Array.isArray(content)
-            ? content
-                .map((b) => (b && typeof b === "object" && "text" in b ? String((b as { text?: string }).text ?? "") : ""))
-                .filter((t) => t && !t.startsWith("<system"))
-                .join(" ")
-            : "";
-      return text.trim() || null;
-    }
-    return null;
-  } catch {
-    return null;
-  }
 }
 
 export async function createAgent(conn: Connection, options: { name: string; model: string; systemPrompt?: string }): Promise<string> {
@@ -273,72 +192,27 @@ export async function deleteAgent(conn: Connection, agentId: string): Promise<vo
   await sdkClient(conn).agents.delete(agentId);
 }
 
-// ── Computers / Environments ────────────────────────────────────────────────
-
-/** Display projection of the SDK's Computer record. */
-export interface ComputerSummary {
-  /** Stable identifier for the physical device across reconnects. */
-  deviceId: string;
-  /** Human-readable computer name. */
-  name: string;
-  /** Current online connection lease (null when offline). */
-  connectionId: string | null;
-  status: "online" | "offline";
-}
-
-function toComputerSummary(record: Computer): ComputerSummary {
-  return {
-    deviceId: record.deviceId,
-    name: record.name,
-    connectionId: record.connectionId,
-    status: record.status,
-  };
-}
+// ── Execution targets ───────────────────────────────────────────────────────
 
 /**
- * List computers registered with this Letta Cloud account. Cloud only —
- * remote profiles connect to a single app-server directly.
+ * Pick where a cloud session should execute. If the account has an
+ * environment (a `letta` listener) online right now, route the session there —
+ * that's the "chat with the agent on my homeserver" case and avoids spinning
+ * a sandbox. Otherwise return undefined and let the SDK manage a sandbox.
  */
-export async function listComputers(conn: Connection, opts: { onlineOnly?: boolean } = {}): Promise<ComputerSummary[]> {
-  if (conn.profile.type !== "cloud") return [];
-  const result = await sdkClient(conn).computers.list({
-    limit: 50,
-    ...(opts.onlineOnly ? { onlineOnly: true } : {}),
-  });
-  return result.computers.map(toComputerSummary);
-}
-
-// ── Profile pictures ────────────────────────────────────────────────────────
-
-export interface AgentProfilePicture {
-  /** Full data URL (data:image/png;base64,...) — renderable directly. */
-  dataUrl: string;
-  /** MemFS commit that produced the image — cache-revision key. */
-  commitSha: string | null;
-}
-
-/**
- * The agent's profile picture (profile.png in the agent's MemFS). Not exposed
- * by the portable SDK — direct REST, like the Signal demo integration.
- * Returns null when the agent has no picture (403/404) or on any error:
- * avatars are decoration and must never surface as a failure.
- */
-export async function fetchAgentProfilePicture(
-  conn: Connection,
-  agentId: string,
-): Promise<AgentProfilePicture | null> {
-  if (conn.profile.type !== "cloud") return null;
+export async function pickCloudEnvironment(conn: Connection): Promise<{ connectionId: string } | undefined> {
+  if (conn.profile.type !== "cloud") return undefined;
   try {
-    const body = (await cloudFetch(
-      conn,
-      `/v1/agents/${encodeURIComponent(agentId)}/profile-picture`,
-      { headers: { Accept: "application/json" } },
-    )) as { data_url?: string; commit_sha?: string | null };
-    if (!body?.data_url) return null;
-    return { dataUrl: body.data_url, commitSha: body.commit_sha ?? null };
+    const body = (await cloudFetch(conn, "/v1/environments")) as {
+      connections?: { id: string; lastSeenAt?: number }[];
+    };
+    const now = Date.now();
+    const online = (body.connections ?? [])
+      .filter((c) => typeof c.lastSeenAt === "number" && now - c.lastSeenAt! < 120_000)
+      .sort((a, b) => (b.lastSeenAt ?? 0) - (a.lastSeenAt ?? 0));
+    return online[0] ? { connectionId: online[0].id } : undefined;
   } catch {
-    // 403/404 = no picture set; any other error is swallowed for the same reason.
-    return null;
+    return undefined;
   }
 }
 
@@ -365,10 +239,6 @@ export async function listConversations(
   opts: { before?: string; limit?: number } = {},
 ): Promise<ConversationSummary[]> {
   const limit = opts.limit ?? 30;
-  // The wrapper's schema normalizes camelCase to the wire's snake_case
-  // (verified: agentId -> agent_id, orderBy: "lastMessageAt" ->
-  // order_by=last_message_at). Unknown keys — like raw snake_case here —
-  // are STRIPPED by the wrapper's validation, so camelCase is required.
   const records = await sdkClient(conn).conversations.list({
     agentId,
     limit,
@@ -385,53 +255,6 @@ export async function listConversations(
     ...(opts.before ? { after: opts.before } : {}),
   });
   return records.map(toConversation);
-}
-
-/**
- * The agent's default ("main") conversation — the one every agent starts
- * with, addressed via the `default` alias on message sends. It is a real
- * conversation with a real ID, but the list endpoint EXCLUDES it; it is
- * discoverable only through the agent's runs (their conversation_ids that
- * never appear in the listed set) and fetchable directly by ID.
- *
- * Returns the default conversation(s) for the agent, or an empty array.
- */
-export async function fetchHiddenConversations(
-  conn: Connection,
-  agentId: string,
-  listedIds: ReadonlySet<string>,
-): Promise<ConversationSummary[]> {
-  if (conn.profile.type !== "cloud") return [];
-  try {
-    const runs = (await cloudFetch(conn, `/v1/runs?agent_id=${encodeURIComponent(agentId)}&limit=30`)) as Array<{
-      conversation_id?: string | null;
-    }>;
-    const hidden = new Set<string>();
-    for (const run of runs) {
-      const cid = run.conversation_id;
-      if (cid && !listedIds.has(cid)) hidden.add(cid);
-    }
-    const out: ConversationSummary[] = [];
-    for (const cid of hidden) {
-      try {
-        const rec = (await cloudFetch(conn, `/v1/conversations/${encodeURIComponent(cid)}`)) as {
-          id?: string;
-          summary?: string | null;
-          last_message_at?: string | null;
-          created_at?: string | null;
-        };
-        if (rec?.id) {
-          out.push(toConversation(rec as never));
-        }
-      } catch {
-        // One unreadable record shouldn't hide the rest.
-      }
-    }
-    return out;
-  } catch {
-    // Discovery is best-effort — the listed set still renders.
-    return [];
-  }
 }
 
 export async function createConversation(conn: Connection, agentId: string): Promise<string> {
@@ -569,34 +392,20 @@ export async function updateConversationModel(
   });
 }
 
-/**
- * The `model_settings` union the API accepts, keyed by provider.
- */
+/** The `model_settings` union the API accepts, keyed by provider. */
 type ModelSettings = NonNullable<UpdateConversationOptions["modelSettings"]>;
 
 /**
  * Effort is spelled differently per provider — Anthropic takes a top-level
  * `effort` (and has no none/minimal tier, but does have `max`), while OpenAI
  * nests it as `reasoning.reasoning_effort`. The provider comes from the handle
- * prefix ("anthropic/claude-…"). An explicit null effort clears the tier from
- * the record (verified Sept 24: null sticks through later model-only PATCHes).
- * Providers we don't model still get the null-reasoning clear so a previous
- * provider's effort can't leak onto them.
+ * prefix ("anthropic/claude-…"). Providers we don't model send the model change
+ * alone rather than a guessed payload the server would reject.
  */
-function modelSettingsFor(model: string, effort: ReasoningEffort | null): ModelSettings | undefined {
+function modelSettingsFor(model: string, effort?: ReasoningEffort | null): ModelSettings | undefined {
+  if (!effort) return undefined;
   const provider = model.includes("/") ? model.split("/")[0] : undefined;
-  if (provider === "zai" || provider === "z-ai" || provider === "lc-zai-coding") {
-    // z.ai family (GLM): the API persists reasoning.reasoning_effort for
-    // provider_type "zai" — verified by round-trip PATCH Sept 21. The desktop
-    // client sends the same shape.
-    return {
-      provider_type: "zai",
-      parallel_tool_calls: true,
-      reasoning: { reasoning_effort: effort },
-    } as ModelSettings;
-  }
   if (provider === "anthropic") {
-    if (!effort) return { provider_type: "anthropic", effort: null } as unknown as ModelSettings;
     const anthropicEfforts = ["low", "medium", "high", "xhigh", "max"] as const;
     type AnthropicEffort = (typeof anthropicEfforts)[number];
     return anthropicEfforts.includes(effort as AnthropicEffort)
@@ -604,53 +413,48 @@ function modelSettingsFor(model: string, effort: ReasoningEffort | null): ModelS
       : undefined;
   }
   if (provider === "openai") {
-    // The typed SDK field omits "max" but the catalog ships OpenAI "max"
-    // variants and the protocol accepts it — pass it through.
-    return {
-      provider_type: "openai",
-      reasoning: { reasoning_effort: effort as SdkReasoningEffort },
-    } as ModelSettings;
+    return { provider_type: "openai", reasoning: { reasoning_effort: effort } };
   }
-  // Unmodeled provider: still clear any previous provider's effort so it can't
-  // leak (test Sept 24: zai effort "high" survived onto a google model when
-  // the PATCH carried model only). Minimal payload, no provider_type guess.
-  if (!effort) return { reasoning: { reasoning_effort: null } } as unknown as ModelSettings;
   return undefined;
 }
 
-export { modelSupportsEffort } from "./modelCapabilities";
+// ── Models ──────────────────────────────────────────────────────────────────
 
-/**
- * Bulk-apply a model to many conversations (settings-sheet "downstream"
- * application). Sequential on purpose — gentle on rate limits. Conversations
- * that fail to update are counted, not thrown, so one bad row doesn't abort
- * the sweep.
- */
-export async function applyModelToConversations(
-  conn: Connection,
-  conversationIds: string[],
-  model: string,
-): Promise<{ updated: number; failed: number }> {
-  let updated = 0;
-  let failed = 0;
-  for (const id of conversationIds) {
-    try {
-      await updateConversationModel(conn, id, { model });
-      updated++;
-    } catch {
-      failed++;
-    }
-  }
-  return { updated, failed };
+export async function listModels(conn: Connection): Promise<ModelOption[]> {
+  // Session-less on every backend since SDK 0.3.1 — no sandbox just to open a picker.
+  const result = await sdkClient(conn).models.list();
+  return result.entries.map((e) => ({ id: e.id, handle: e.handle, label: e.label }));
 }
 
-// ── Runs ────────────────────────────────────────────────────────────────────
+// ── Angus-only surface (from angus lineage) ─────────────────────────────────
+
+export interface ComputerSummary {
+  /** Stable identifier for the physical device across reconnects. */
+  deviceId: string;
+  /** Human-readable computer name. */
+  name: string;
+  /** Current online connection lease (null when offline). */
+  connectionId: string | null;
+  status: "online" | "offline";
+}
+
 
 export interface RunSummary {
   id: string;
   status: string;
   completed_at?: string;
 }
+
+
+function toComputerSummary(record: Computer): ComputerSummary {
+  return {
+    deviceId: record.deviceId,
+    name: record.name,
+    connectionId: record.connectionId,
+    status: record.status,
+  };
+}
+
 
 function toRunSummary(run: Record<string, unknown>): RunSummary {
   return {
@@ -659,6 +463,21 @@ function toRunSummary(run: Record<string, unknown>): RunSummary {
     completed_at: run.completed_at as string | undefined,
   };
 }
+
+
+/**
+ * List computers registered with this Letta Cloud account. Cloud only —
+ * remote profiles connect to a single app-server directly.
+ */
+export async function listComputers(conn: Connection, opts: { onlineOnly?: boolean } = {}): Promise<ComputerSummary[]> {
+  if (conn.profile.type !== "cloud") return [];
+  const result = await sdkClient(conn).computers.list({
+    limit: 50,
+    ...(opts.onlineOnly ? { onlineOnly: true } : {}),
+  });
+  return result.computers.map(toComputerSummary);
+}
+
 
 /**
  * List recent runs for a conversation via REST. Used by the background
@@ -696,29 +515,172 @@ export async function listConversationRuns(
   return text ? (JSON.parse(text) as Record<string, unknown>[]).map(toRunSummary) : [];
 }
 
-// ── Models ──────────────────────────────────────────────────────────────────
 
-export async function listModels(conn: Connection): Promise<ModelOption[]> {
-  // Session-less on every backend since SDK 0.3.1 — no sandbox just to open a picker.
-  const result = await sdkClient(conn).models.list();
-  const EFFORTS: readonly ReasoningEffort[] = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
-  return result.entries.map((e) => {
-    const raw = e.updateArgs?.reasoning_effort;
-    // z.ai-family models declare their tiers in reasoning_capabilities, not
-    // updateArgs (which stays null) — parse both.
-    const caps = (e as { reasoning_capabilities?: { supported_efforts?: unknown } | null })
-      .reasoning_capabilities;
-    const supported = Array.isArray(caps?.supported_efforts)
-      ? caps.supported_efforts.filter(
-          (x): x is ReasoningEffort => typeof x === "string" && (EFFORTS as readonly string[]).includes(x),
-        )
-      : undefined;
-    return {
-      id: e.id,
-      handle: e.handle,
-      label: e.label,
-      effort: typeof raw === "string" && (EFFORTS as readonly string[]).includes(raw) ? (raw as ReasoningEffort) : undefined,
-      supportedEfforts: supported && supported.length > 0 ? supported : undefined,
-    };
-  });
+/**
+ * The agent's default ("main") conversation — the one every agent starts
+ * with, addressed via the `default` alias on message sends. It is a real
+ * conversation with a real ID, but the list endpoint EXCLUDES it; it is
+ * discoverable only through the agent's runs (their conversation_ids that
+ * never appear in the listed set) and fetchable directly by ID.
+ *
+ * Returns the default conversation(s) for the agent, or an empty array.
+ */
+export async function fetchHiddenConversations(
+  conn: Connection,
+  agentId: string,
+  listedIds: ReadonlySet<string>,
+): Promise<ConversationSummary[]> {
+  if (conn.profile.type !== "cloud") return [];
+  try {
+    const runs = (await cloudFetch(conn, `/v1/runs?agent_id=${encodeURIComponent(agentId)}&limit=30`)) as Array<{
+      conversation_id?: string | null;
+    }>;
+    const hidden = new Set<string>();
+    for (const run of runs) {
+      const cid = run.conversation_id;
+      if (cid && !listedIds.has(cid)) hidden.add(cid);
+    }
+    const out: ConversationSummary[] = [];
+    for (const cid of hidden) {
+      try {
+        const rec = (await cloudFetch(conn, `/v1/conversations/${encodeURIComponent(cid)}`)) as {
+          id?: string;
+          summary?: string | null;
+          last_message_at?: string | null;
+          created_at?: string | null;
+        };
+        if (rec?.id) {
+          out.push(toConversation(rec as never));
+        }
+      } catch {
+        // One unreadable record shouldn't hide the rest.
+      }
+    }
+    return out;
+  } catch {
+    // Discovery is best-effort — the listed set still renders.
+    return [];
+  }
 }
+
+
+/**
+ * One unfiltered sweep of recent runs — the in-progress signal for list
+ * screens. Returns which agents and conversations currently have a run
+ * in flight. Cost: a single request regardless of fleet size.
+ */
+export async function fetchRunActivity(conn: Connection): Promise<{
+  runningAgents: Set<string>;
+  runningConversations: Set<string>;
+}> {
+  const runningAgents = new Set<string>();
+  const runningConversations = new Set<string>();
+  try {
+    const body = (await cloudFetch(conn, "/v1/runs?limit=50")) as Array<{
+      status?: string;
+      agent_id?: string | null;
+      conversation_id?: string | null;
+    }>;
+    for (const run of body) {
+      if (run.status !== "running") continue;
+      if (run.agent_id) runningAgents.add(run.agent_id);
+      if (run.conversation_id) runningConversations.add(run.conversation_id);
+    }
+  } catch {
+    // Activity indicators are decoration — an empty set is the graceful fallback.
+  }
+  return { runningAgents, runningConversations };
+}
+
+
+/**
+ * Bulk-apply a model to many conversations (settings-sheet "downstream"
+ * application). Sequential on purpose — gentle on rate limits. Conversations
+ * that fail to update are counted, not thrown, so one bad row doesn't abort
+ * the sweep.
+ */
+export async function applyModelToConversations(
+  conn: Connection,
+  conversationIds: string[],
+  model: string,
+): Promise<{ updated: number; failed: number }> {
+  let updated = 0;
+  let failed = 0;
+  for (const id of conversationIds) {
+    try {
+      await updateConversationModel(conn, id, { model });
+      updated++;
+    } catch {
+      failed++;
+    }
+  }
+  return { updated, failed };
+}
+
+/**
+ * The agent's profile picture (profile.png in the agent's MemFS). Not exposed
+ * by the portable SDK — direct REST, like the Signal demo integration.
+ * Returns null when the agent has no picture (403/404) or on any error:
+ * avatars are decoration and must never surface as a failure.
+ */
+export interface AgentProfilePicture {
+  /** Full data URL (data:image/png;base64,...) — renderable directly. */
+  dataUrl: string;
+  /** MemFS commit that produced the image — cache-revision key. */
+  commitSha: string | null;
+}
+
+export async function fetchAgentProfilePicture(
+  conn: Connection,
+  agentId: string,
+): Promise<AgentProfilePicture | null> {
+  if (conn.profile.type !== "cloud") return null;
+  try {
+    const body = (await cloudFetch(
+      conn,
+      `/v1/agents/${encodeURIComponent(agentId)}/profile-picture`,
+      { headers: { Accept: "application/json" } },
+    )) as { data_url?: string; commit_sha?: string | null };
+    if (!body?.data_url) return null;
+    return { dataUrl: body.data_url, commitSha: body.commit_sha ?? null };
+  } catch {
+    // 403/404 = no picture set; any other error is swallowed for the same reason.
+    return null;
+  }
+}
+
+/**
+ * The agent's latest reply text (newest assistant_message), for list previews.
+ * Returns null when the conversation has no assistant messages.
+ */
+export async function fetchLastAssistantPreview(
+  conn: Connection,
+  conversationId: string,
+): Promise<string | null> {
+  try {
+    const body = (await cloudFetch(
+      conn,
+      `/v1/conversations/${encodeURIComponent(conversationId)}/messages?limit=6`,
+    )) as Array<{ message_type?: string; date?: string; content?: unknown }>;
+    for (const m of body) {
+      // Newest first; first assistant_message wins.
+      if (m.message_type !== "assistant_message") continue;
+      const content = m.content;
+      const text =
+        typeof content === "string"
+          ? content
+          : Array.isArray(content)
+            ? content
+                .map((b) => (b && typeof b === "object" && "text" in b ? String((b as { text?: string }).text ?? "") : ""))
+                .filter((t) => t && !t.startsWith("<system"))
+                .join(" ")
+            : "";
+      return text.trim() || null;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export { modelSupportsEffort } from "./modelCapabilities";

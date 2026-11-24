@@ -1,45 +1,43 @@
 /**
- * Model & reasoning sheet (docs/design-doc.md §4.5): search, favorites +
- * recents, deduped model rows with mono handles, and an effort segment that
- * only offers the tiers the selected model's catalog actually ships. Saving
- * state stays on the chip until the server confirms; failures revert with an
- * inline error.
+ * Model & reasoning sheet (docs/design-doc.md §4.5): search, model rows
+ * with mono handles, and an effort segment. Saving state stays on the chip
+ * until the server confirms; failures revert with an inline error.
  */
 import type { BottomSheetModal } from "@gorhom/bottom-sheet";
-import { forwardRef, useCallback, useEffect, useMemo, useState } from "react";
+import { forwardRef, useState } from "react";
 import { StyleSheet, TextInput, View } from "react-native";
 
 import type { ModelOption, ReasoningEffort } from "../../lib/letta/api";
-import {
-  loadFavoriteModels,
-  loadRecentModels,
-  pushRecentModel,
-  toggleFavoriteModel,
-} from "../../lib/modelPrefs";
 import { useTheme } from "../../theme/ThemeProvider";
 import { radius, space } from "../../theme/tokens";
 import { Sheet } from "../ui/Sheet";
 import { Text } from "../ui/Text";
 import { Touchable } from "../ui/Touchable";
 
-/** Canonical display order for effort tiers. */
-const EFFORT_ORDER: readonly ReasoningEffort[] = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
-
 /**
- * Effort tiers the app can actually send for this handle: OpenAI takes every
- * catalog tier, Anthropic has no none/minimal tier, z.ai (GLM: zai/, z-ai/,
- * lc-zai-coding/ handles) sends reasoning.reasoning_effort with whatever
- * tiers the catalog declares. Other providers have no effort payload wired
- * up (modelSettingsFor sends the model change alone).
+ * Effort tiers per provider family — derived-until-the-API-populates table
+ * (reasoning_capabilities probed null across the catalog Nov 16; mirrors the
+ * desktop client's store). Unknown provider = full list (the SDK validates
+ * the enum at send and the turn errors visibly if the tier is unsupported —
+ * but the SDK set is provider-blind, so per-provider gating stays ours).
+ * Restored from PR #6 (Uncia N1): an arriving effort outside the provider
+ * subset must not commit on the next model tap.
  */
-function sendableEfforts(handle: string, efforts: ReasoningEffort[]): ReasoningEffort[] {
-  const provider = handle.includes("/") ? handle.split("/")[0] : undefined;
-  if (provider === "openai") return EFFORT_ORDER.filter((e) => efforts.includes(e));
-  if (provider === "anthropic") return EFFORT_ORDER.filter((e) => e !== "none" && e !== "minimal" && efforts.includes(e));
-  if (provider === "zai" || provider === "z-ai" || provider === "lc-zai-coding") {
-    return EFFORT_ORDER.filter((e) => efforts.includes(e));
-  }
-  return [];
+const PROVIDER_EFFORTS: Record<string, ReasoningEffort[]> = {
+  zai: ["low", "medium", "high"],
+  "z-ai": ["low", "medium", "high"],
+  "lc-zai-coding": ["low", "medium", "high"],
+  openai: ["none", "minimal", "low", "medium", "high"],
+  anthropic: ["low", "medium", "high"],
+  google: ["low", "medium", "high"],
+  deepseek: ["low", "medium", "high"],
+};
+const ALL_EFFORTS: ReasoningEffort[] = ["none", "minimal", "low", "medium", "high", "xhigh"];
+
+function supportedEffortsFor(handle: string | null | undefined): ReasoningEffort[] {
+  if (!handle) return ALL_EFFORTS;
+  const provider = handle.split("/")[0] ?? "";
+  return PROVIDER_EFFORTS[provider] ?? ALL_EFFORTS;
 }
 
 interface Props {
@@ -47,185 +45,34 @@ interface Props {
   currentModel: string | null;
   currentEffort: string | null;
   onSelect: (model: string, effort?: ReasoningEffort) => void;
-  error?: string | null;
-  /**
-   * Picker mode: rows hand the handle to onPick instead of applying it. Used
-   * by settings sheets for downstream model application. The effort segment
-   * and pending flow are skipped; the caller closes the sheet after picking.
-   */
   onPick?: (model: string) => void;
-  /** Fires after the sheet closes (pick, back, drag) — the caller uses this
-   *  to re-present the settings sheet it dismissed before presenting us. */
   onSheetDismiss?: () => void;
+  error?: string | null;
 }
 
 export const ModelSheet = forwardRef<BottomSheetModal, Props>(function ModelSheet(
-  { models, currentModel, currentEffort, onSelect, error, onPick, onSheetDismiss },
+  { models, currentModel, currentEffort, onSelect, onPick, onSheetDismiss, error },
   ref,
 ) {
   const { colors } = useTheme();
   const [search, setSearch] = useState("");
-  const [favorites, setFavorites] = useState<string[]>([]);
-  const [recents, setRecents] = useState<string[]>([]);
-  const [effort, setEffort] = useState<ReasoningEffort | null>(null);
-  // Model tapped while the sheet stays open, waiting for an effort choice.
-  const [pending, setPending] = useState<ModelOption | null>(null);
-
-  // handle → tiers the catalog ships for it (from the per-variant entries).
-  const catalogEfforts = useMemo(() => {
-    const map = new Map<string, Set<ReasoningEffort>>();
-    for (const m of models) {
-      let set = map.get(m.handle);
-      if (!set) map.set(m.handle, (set = new Set()));
-      // Per-effort catalog variants (e.g. openai tiers ship as separate entries).
-      if (m.effort) set.add(m.effort);
-      // reasoning_capabilities.supported_efforts (z.ai/GLM family).
-      for (const e of m.supportedEfforts ?? []) set.add(e);
-    }
-    return map;
-  }, [models]);
-
-  const effortsFor = useCallback(
-    (handle: string) => sendableEfforts(handle, [...(catalogEfforts.get(handle) ?? [])]),
-    [catalogEfforts],
+  // Validate against the SELECTED provider's tiers (not ALL_EFFORTS): an
+  // arriving effort outside the provider subset would render unselected yet
+  // still commit on the next model tap. (Uncia N1, PR #6.)
+  const [effort, setEffort] = useState<ReasoningEffort | null>(
+    supportedEffortsFor(currentModel).includes(currentEffort as ReasoningEffort)
+      ? (currentEffort as ReasoningEffort)
+      : null,
   );
 
-  // Efforts of the model the segment targets: a pending pick if one is waiting,
-  // otherwise the model in use (standalone effort adjustment).
-  const effortHandle = pending?.handle ?? currentModel;
-  const currentModelEfforts = useMemo(
-    () => (effortHandle ? effortsFor(effortHandle) : []),
-    [effortHandle, effortsFor],
+  const filtered = models.filter(
+    (m) =>
+      m.label.toLowerCase().includes(search.toLowerCase()) ||
+      m.handle.toLowerCase().includes(search.toLowerCase()),
   );
-
-  // One row per handle (catalog ships per-effort variants under one handle).
-  const deduped = useMemo(() => {
-    const seen = new Set<string>();
-    return models.filter((m) => !seen.has(m.handle) && seen.add(m.handle));
-  }, [models]);
-
-  useEffect(() => {
-    void loadFavoriteModels().then(setFavorites);
-    void loadRecentModels().then(setRecents);
-  }, []);
-
-  // Seed the effort selection from the conversation's current tier.
-  useEffect(() => {
-    setEffort(
-      currentEffort && currentModelEfforts.includes(currentEffort as ReasoningEffort)
-        ? (currentEffort as ReasoningEffort)
-        : null,
-    );
-  }, [currentEffort, currentModelEfforts]);
-
-  const byHandle = useMemo(() => new Map(deduped.map((m) => [m.handle, m])), [deduped]);
-
-  // Model tap: picker mode hands back the handle. Otherwise, if the model has
-  // effort tiers the sheet stays open so the tier can be picked (pending);
-  // otherwise it applies immediately and closes.
-  const pressModel = useCallback(
-    (m: ModelOption) => {
-      if (onPick) {
-        void pushRecentModel(m.handle).then(setRecents);
-        setSearch("");
-        onPick(m.handle);
-        return;
-      }
-      const targetEfforts = effortsFor(m.handle);
-      if (targetEfforts.length === 0) {
-        void pushRecentModel(m.handle).then(setRecents);
-        setSearch("");
-        onSelect(m.handle, undefined);
-        return;
-      }
-      setPending(m);
-      // The effort seed effect re-tiers for the new target automatically.
-    },
-    [onPick, effortsFor, onSelect],
-  );
-
-  // Effort tap applies the pending model + tier (or re-tiers the model in
-  // use) and closes the sheet via the parent's dismiss-on-select.
-  const selectEffort = useCallback(
-    (e: ReasoningEffort) => {
-      const next = effort === e ? null : e;
-      setEffort(next);
-      if (!next) return;
-      const handle = pending?.handle ?? currentModel;
-      if (!handle) return;
-      void pushRecentModel(handle).then(setRecents);
-      setSearch("");
-      onSelect(handle, next);
-    },
-    [effort, pending, currentModel, onSelect],
-  );
-
-  const toggleFavorite = useCallback((handle: string) => {
-    void toggleFavoriteModel(handle).then(setFavorites);
-  }, []);
-
-  const renderModelRow = useCallback(
-    (m: ModelOption) => {
-      const selected = currentModel === m.handle;
-      const isFavorite = favorites.includes(m.handle);
-      return (
-        <View key={m.handle} style={styles.modelRow}>
-          <Touchable
-            accessibilityRole="button"
-            accessibilityLabel={`Model ${m.label}${selected ? ", selected" : ""}`}
-            onPress={() => pressModel(m)}
-            style={styles.modelMain}
-          >
-            <View style={styles.modelRowInner}>
-              <View style={styles.modelText}>
-                <Text role="body">{m.label}</Text>
-                <Text role="sub" ink={3} mono>
-                  {m.handle}
-                </Text>
-              </View>
-              {selected ? (
-                <Text role="bodyEm" tone="accent">
-                  ✓
-                </Text>
-              ) : null}
-            </View>
-          </Touchable>
-          <Touchable
-            accessibilityRole="button"
-            accessibilityLabel={`${isFavorite ? "Unfavorite" : "Favorite"} model ${m.label}`}
-            onPress={() => toggleFavorite(m.handle)}
-            style={styles.starTouch}
-          >
-            <Text role="body" tone={isFavorite ? "accent" : undefined} ink={isFavorite ? undefined : 3}>
-              {isFavorite ? "★" : "☆"}
-            </Text>
-          </Touchable>
-        </View>
-      );
-    },
-    [currentModel, favorites, pressModel, toggleFavorite],
-  );
-
-  const query = search.trim().toLowerCase();
-  const filtered = query
-    ? deduped.filter((m) => m.label.toLowerCase().includes(query) || m.handle.toLowerCase().includes(query))
-    : deduped;
-  const favoriteRows = favorites.map((h) => byHandle.get(h)).filter((m): m is ModelOption => Boolean(m));
-  const recentRows = recents
-    .map((h) => byHandle.get(h))
-    .filter((m): m is ModelOption => Boolean(m) && !favorites.includes(m!.handle));
 
   return (
-    <Sheet
-      ref={ref}
-      title="Model"
-      scroll
-      onSheetDismiss={() => {
-        setPending(null);
-        setSearch("");
-        onSheetDismiss?.();
-      }}
-    >
+    <Sheet ref={ref} title="Model" onSheetDismiss={onSheetDismiss}>
       <TextInput
         value={search}
         onChangeText={setSearch}
@@ -234,72 +81,63 @@ export const ModelSheet = forwardRef<BottomSheetModal, Props>(function ModelShee
         autoCapitalize="none"
         style={[styles.search, { borderColor: colors.surfaceEdge, color: colors.ink }]}
       />
-      {!onPick && currentModelEfforts.length > 0 ? (
-        <View style={styles.effortBlock}>
-          <Text role="micro" ink={3}>
-            {pending ? `Reasoning effort — ${pending.label}` : "Reasoning effort"}
-          </Text>
-          <View style={[styles.segment, { borderColor: colors.surfaceEdge }]}>
-            {currentModelEfforts.map((e) => (
-              <Touchable
-                key={e}
-                accessibilityRole="button"
-                accessibilityLabel={`Effort ${e}${effort === e ? ", selected" : ""}`}
-                onPress={() => selectEffort(e)}
-                style={[styles.segmentItem, effort === e && { backgroundColor: colors.bubble }]}
-              >
-                <Text role="sub" ink={effort === e ? 1 : 2} style={styles.segmentLabel}>
-                  {e}
-                </Text>
-              </Touchable>
-            ))}
-          </View>
-          {pending ? (
-            <Text role="sub" ink={3}>
-              Pick an effort to switch to {pending.label}, or tap another model.
-            </Text>
-          ) : null}
+      <View style={styles.effortBlock}>
+        <Text role="micro" ink={3}>
+          Reasoning effort
+        </Text>
+        <View style={[styles.segment, { borderColor: colors.surfaceEdge }]}>
+          {supportedEffortsFor(models.find((m) => m.handle === currentModel)?.handle).map((e) => (
+            <Touchable
+              key={e}
+              accessibilityRole="button"
+              accessibilityLabel={`Effort ${e}${effort === e ? ", selected" : ""}`}
+              onPress={() => setEffort(effort === e ? null : e)}
+              style={[styles.segmentItem, effort === e && { backgroundColor: colors.bubble }]}
+            >
+              <Text role="sub" ink={effort === e ? 1 : 2} style={styles.segmentLabel}>
+                {e}
+              </Text>
+            </Touchable>
+          ))}
         </View>
-      ) : null}
+      </View>
       {error ? (
         <Text role="sub" tone="danger">
           {error}
         </Text>
       ) : null}
       <View style={styles.listBlock}>
-        {query ? (
-          <>
-            {filtered.slice(0, 12).map(renderModelRow)}
-            {filtered.length === 0 ? (
-              <Text role="sub" ink={3}>
-                No models match “{search.trim()}”.
-              </Text>
-            ) : null}
-          </>
-        ) : (
-          <>
-            {favoriteRows.length > 0 ? (
-              <>
-                <Text role="micro" ink={3} style={styles.sectionLabel}>
-                  Favorites
-                </Text>
-                {favoriteRows.map(renderModelRow)}
-              </>
-            ) : null}
-            {recentRows.length > 0 ? (
-              <>
-                <Text role="micro" ink={3} style={styles.sectionLabel}>
-                  Recent
-                </Text>
-                {recentRows.map(renderModelRow)}
-              </>
-            ) : null}
-            <Text role="micro" ink={3} style={styles.sectionLabel}>
-              {favoriteRows.length > 0 || recentRows.length > 0 ? "All models" : "Models"}
-            </Text>
-            {filtered.slice(0, 8).map(renderModelRow)}
-          </>
-        )}
+        {filtered.slice(0, 8).map((m) => {
+          const selected = currentModel === m.handle;
+          return (
+            <Touchable
+              key={m.handle}
+              accessibilityRole="button"
+              accessibilityLabel={`Model ${m.label}${selected ? ", selected" : ""}`}
+              onPress={() => { if (onPick) { onPick(m.handle); } else { onSelect(m.handle, effort ?? undefined); } }}
+              style={styles.modelRow}
+            >
+              <View style={styles.modelRowInner}>
+                <View style={styles.modelText}>
+                  <Text role="body">{m.label}</Text>
+                  <Text role="sub" ink={3} mono>
+                    {m.handle}
+                  </Text>
+                </View>
+                {selected ? (
+                  <Text role="bodyEm" tone="accent">
+                    ✓
+                  </Text>
+                ) : null}
+              </View>
+            </Touchable>
+          );
+        })}
+        {filtered.length === 0 ? (
+          <Text role="sub" ink={3}>
+            No models match “{search}”.
+          </Text>
+        ) : null}
       </View>
     </Sheet>
   );
@@ -324,10 +162,7 @@ const styles = StyleSheet.create({
   segmentItem: { flexGrow: 1, flexBasis: "16%", minHeight: 38, alignItems: "center" },
   segmentLabel: { textTransform: "capitalize", fontSize: 12 },
   listBlock: { gap: 2 },
-  sectionLabel: { paddingTop: space.sm, paddingBottom: 2 },
-  modelRow: { flexDirection: "row", alignItems: "center", minHeight: 46 },
-  modelMain: { flex: 1 },
+  modelRow: { minHeight: 46 },
   modelRowInner: { flexDirection: "row", alignItems: "center", gap: space.sm, paddingVertical: 6 },
   modelText: { flex: 1, gap: 1 },
-  starTouch: { paddingHorizontal: space.sm, paddingVertical: space.xs },
 });

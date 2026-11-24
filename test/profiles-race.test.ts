@@ -37,7 +37,12 @@ interface OAuthCredential {
   expiresAt: number;
 }
 
-mock.module("../src/lib/auth/oauthTokens", () => ({
+// profiles.ts imports oauth functions from @angus/letta-client-core (the Phase-2
+// extraction) — the mock must intercept THAT surface. Spread the real module so
+// non-mocked exports (used elsewhere via the same import) keep real behavior.
+const realCore = await import("@angus/letta-client-core");
+mock.module("@angus/letta-client-core", () => ({
+  ...realCore,
   parseOAuthCredential: (value: string): OAuthCredential | null => {
     const parsed = JSON.parse(value) as OAuthCredential;
     return parsed.kind === "oauth" ? parsed : null;
