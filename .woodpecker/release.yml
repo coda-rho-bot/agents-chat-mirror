@@ -116,8 +116,13 @@ steps:
         export ORG_GRADLE_PROJECT_PLAY_KEY_PASSWORD="$PLAY_KEY_PASSWORD"
         export PATH=/opt/ci-tools/node/bin:/opt/ci-tools/bun/bin:$PATH
         cd android
-        ./gradlew app:bundleRelease -x lint -x lintVitalAnalyzeRelease -x lintVitalRelease -x test --no-daemon
+        ./gradlew app:bundleRelease -x lint -x lintVitalAnalyzeRelease -x lintVitalRelease -x test --no-daemon > /tmp/build.log 2>&1 || { echo "FATAL: bundleRelease failed" >&2; exit 1; }
         cd ..
+        # RUNTIME canary: the guard resolved RELEASE at build time (the static grep
+        # proves the guard exists in source; this proves it fired). Redirect (not tee):
+        # pipeline exit status in dash is the LAST command's — tee would swallow gradle's.
+        grep -q "SIGNING MODE: release keystore" /tmp/build.log || { echo "FATAL: build resolved debug signing - aborting before upload" >&2; exit 1; }
+        grep "SIGNING MODE" /tmp/build.log
         AAB_PATH=$(find android/app/build/outputs/bundle/release/ -name "*.aab" | head -1)
         if [ -z "$AAB_PATH" ]; then
           echo "FATAL: No AAB found after bundleRelease"
