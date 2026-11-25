@@ -50,7 +50,7 @@ Run your own Letta server and connect from the app. Guide and source:
 
 ## Category
 
-Productivity (or Communication — Harry's call)
+**Productivity** (DECIDED Nov 25: agent tooling/work surface, not person-to-person messaging)
 
 ---
 
@@ -87,20 +87,16 @@ Productivity (or Communication — Harry's call)
 - Questionnaire: utility/productivity, no user-generated content sharing
   (agent conversations are private to the user's own server), no violence
   etc. → expect **Everyone** rating.
-- One flag to review: "Does the app share user-generated content?"
-  — conversations are exchanged with the user's own AI server, not with
-  other people. Recommend answering **No** (private client-server
-  traffic), but Harry should confirm.
+- **UGC flag: No** (DECIDED Nov 25: private client-server traffic with the
+  user's own AI agents, not person-to-person sharing)
 
 ---
 
 ## Privacy Policy URL
 
-**Required before production.** Needed: a hosted privacy-policy page.
-Options: a page on angussoftware.com, or a
-`docs/privacy-policy.md` → hosted URL. The content follows the
-data-safety answers above (client-only app, no developer data
-collection, BYO server). **Harry's call on hosting.**
+**DECIDED + LIVE (Nov 25):** https://dl.angussoftware.dev/agentschat/privacy/
+— real static page on the established release channel (matches the
+/fuel/privacy URL pattern; content follows the data-safety answers).
 
 ---
 
@@ -115,8 +111,9 @@ collection, BYO server). **Harry's call on hosting.**
 
 ## Contact Details (Play Console)
 
-Developer email: (Harry's call — existing fleet address used on other
-apps?)
+**angussoftware.com website as public contact**; developer email: use the
+Play Console account's existing address (the same one the other fleet
+apps list).
 
 ---
 
