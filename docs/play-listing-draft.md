@@ -12,7 +12,7 @@ Agents Chat
 
 ## Short Description (80 chars max)
 
-Chat with your AI agents on your own servers, from your phone.
+Chat with your AI agents on your own server or cloud, from your phone.
 
 ## Full Description
 
@@ -38,8 +38,8 @@ agents, follow their work, and approve their actions — from anywhere.
 
 This app is a client. Your agents run on infrastructure you control:
 your own Letta server (self-hosted, open source) or your Letta cloud
-account. The app talks directly to your server — the developer operates
-no backend for this app and sees none of your conversations.
+account. The app talks directly to your server — the developer operates no
+messaging or data backend and sees none of your conversations.
 
 **Self-hosting**
 
@@ -62,7 +62,7 @@ Run your own Letta server and connect from the app. Guide and source:
 | Data type collected | **App activity → App interactions** |
 | Is data collected? | Yes |
 | Is data shared? | No |
-| Encrypted in transit? | Yes — all connections use TLS (HTTPS) to the user's configured server |
+| Encrypted in transit? | Yes — cloud connections always TLS; self-hosted uses the scheme the user configures (wss:// recommended, plain ws:// warned) |
 | Can data be deleted? | Yes — delete the conversation/account in the app or on your server |
 
 **Rationale (for Harry's review):**
