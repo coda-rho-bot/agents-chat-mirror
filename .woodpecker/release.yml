@@ -40,7 +40,11 @@ steps:
         node --version && bun --version
       # JS deps (node_modules for autolinking + codegen)
       - export PATH=/opt/ci-tools/node/bin:/opt/ci-tools/bun/bin:$PATH
-      - bun install --frozen-lockfile
+      # --ignore-scripts: letta-code (peer dep of the SDK, auto-installed) carries node-pty whose
+      # native postinstall breaks under node-gyp without npm metadata. The mobile app never executes
+      # letta-code's native modules — RN autolinking + codegen run from node_modules at gradle time
+      # (verified: full bundleRelease green on the scripts-skipped tree).
+      - bun install --frozen-lockfile --ignore-scripts
       - mkdir -p ~/.gradle
       # Leak-proof signing setup (PR #80 pattern): keystore + credentials
       # consumed ONLY inside Python via os.environ; zero secret references
