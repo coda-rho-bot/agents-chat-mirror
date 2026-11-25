@@ -1,86 +1,154 @@
 # Play release pipeline — angus agents-chat (com.angussoftware.agentschat)
-# Pattern: ASA/Tasks (tag-driven, build once, internal track).
-# Secrets: AGENTSCHAT_KEYSTORE_B64/PASSWORD/KEY_ALIAS/KEY_PASSWORD (repo 13)
-#          GOOGLE_PLAY_SERVICE_ACCOUNT_B64 (server env blob)
-steps:
-  - name: build-aab
-    image: oven/bun:1
-    commands:
-      # The guard prints SIGNING MODE; partial secrets fail at config time; all-four signs release.
-      - cd android
-      - |
-        echo "$AGENTSCHAT_KEYSTORE_B64" | base64 -d > /tmp/agentschat-release.jks
-        ANDROID_HOME=/opt/android-sdk JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 \
-        ./gradlew app:bundleRelease -x lint -x lintVitalAnalyzeRelease -x lintVitalRelease -x test \
-          -PreactNativeArchitectures=arm64-v8a \
-          -PPLAY_STORE_FILE=/tmp/agentschat-release.jks \
-          -PPLAY_STORE_PASSWORD=$AGENTSCHAT_KEYSTORE_PASSWORD \
-          -PPLAY_KEY_ALIAS=$AGENTSCHAT_KEY_ALIAS \
-          -PPLAY_KEY_PASSWORD=$AGENTSCHAT_KEY_PASSWORD
-      - test -f android/app/build/outputs/bundle/release/app-release.aab || (echo "FATAL: no AAB"; exit 1)
-      - cp android/app/build/outputs/bundle/release/app-release.aab /tmp/app-release.aab
-
-  - name: upload-internal
-    image: python:3.12-alpine
-    commands:
-      - pip install --quiet google-auth
-      - |
-        python3 - << 'PY'
-        import json, os, base64, time, urllib.request, subprocess
-        sa = json.loads(base64.b64decode(os.environ["GOOGLE_PLAY_SERVICE_ACCOUNT_B64"]))
-        from google.oauth2 import service_account
-        from google.auth.transport.requests import Request
-        creds = service_account.Credentials.from_service_account_info(
-            sa, scopes=["https://www.googleapis.com/auth/androidpublisher"])
-        creds.refresh(Request())
-        tok = creds.token
-
-        PKG = "com.angussoftware.agentschat"
-        BASE = f"https://androidpublisher.googleapis.com/androidpublisher/v3/applications/{PKG}"
-
-        # 1. open an edit
-        req = urllib.request.Request(f"{BASE}/edits", method="POST",
-              data=json.dumps({}).encode(),
-              headers={"Authorization": f"Bearer {tok}", "Content-Type": "application/json"})
-        edit = json.load(urllib.request.urlopen(req))
-        edit_id = edit["id"]
-        print("edit", edit_id)
-
-        # 2. upload the AAB
-        aab = open("/tmp/app-release.aab", "rb").read()
-        boundary = "woodpecker-play-upload"
-        body = (f"--{boundary}\r\n"
-                "Content-Type: application/octet-stream\r\n\r\n").encode() + aab + f"\r\n--{boundary}--\r\n".encode()
-        req = urllib.request.Request(
-            f"{BASE}/edits/{edit_id}/apks",
-            data=body, method="POST",
-            headers={"Authorization": f"Bearer {tok}",
-                     "Content-Type": f"multipart/related; boundary={boundary}"})
-        apk = json.load(urllib.request.urlopen(req))
-        version_code = apk["versionCode"]
-        print("uploaded versionCode", version_code)
-
-        # 3. assign to internal track
-        release_name = os.environ.get("CI_COMMIT_TAG", f"build-{version_code}")
-        req = urllib.request.Request(
-            f"{BASE}/edits/{edit_id}/tracks/internal",
-            data=json.dumps({"releases": [{
-                "name": release_name,
-                "versionCodes": [str(version_code)],
-                "status": "completed",
-            }]}).encode(), method="PUT",
-            headers={"Authorization": f"Bearer {tok}", "Content-Type": "application/json"})
-        urllib.request.urlopen(req)
-        print("assigned to internal track")
-
-        # 4. commit the edit
-        req = urllib.request.Request(
-            f"{BASE}/edits/{edit_id}", method="POST",
-            data=json.dumps({}).encode(),
-            headers={"Authorization": f"Bearer {tok}", "Content-Type": "application/json"})
-        urllib.request.urlopen(req)
-        print("EDIT COMMITTED — live on internal track")
-        PY
-
+# Pattern: angus-tasks release.yml (proven end-to-end, Sep 2026). Build once,
+# sign at the guard, upload via the /upload/ bundles endpoint, commit the edit.
 when:
-  event: [tag, manual]
+  - event: tag
+    ref: refs/tags/v*
+  - event: manual
+
+steps:
+  release:
+    image: localhost:5000/ci-theming-emulator:latest
+    environment:
+      ANDROID_HOME: /opt/android-sdk
+      AGENTSCHAT_KEYSTORE_B64:
+        from_secret: AGENTSCHAT_KEYSTORE_B64
+      AGENTSCHAT_KEYSTORE_PASSWORD:
+        from_secret: AGENTSCHAT_KEYSTORE_PASSWORD
+      AGENTSCHAT_KEY_ALIAS:
+        from_secret: AGENTSCHAT_KEY_ALIAS
+      AGENTSCHAT_KEY_PASSWORD:
+        from_secret: AGENTSCHAT_KEY_PASSWORD
+      # Play upload SA — consumed ONLY via os.environ inside upload-play.py;
+      # never expanded in shell command text (post-#287 leak-proofing).
+      GOOGLE_PLAY_SERVICE_ACCOUNT_B64:
+        from_secret: GOOGLE_PLAY_SERVICE_ACCOUNT_B64
+      PLAY_PACKAGE: com.angussoftware.agentschat
+      PLAY_TRACK: internal
+    commands:
+      # JS deps first (node_modules for autolinking + codegen)
+      - bun install --frozen-lockfile
+      - mkdir -p ~/.gradle
+      # Leak-proof signing setup (PR #80 pattern): keystore + credentials
+      # consumed ONLY inside Python via os.environ; zero secret references
+      # in shell command text.
+      - |
+        cat > /tmp/signing-setup.py << 'PYEOF'
+        import base64, os, sys
+        REQUIRED = ['AGENTSCHAT_KEYSTORE_B64', 'AGENTSCHAT_KEYSTORE_PASSWORD', 'AGENTSCHAT_KEY_ALIAS', 'AGENTSCHAT_KEY_PASSWORD']
+        missing = [k for k in REQUIRED if not os.environ.get(k)]
+        if missing:
+            print('FATAL: missing signing env: ' + ', '.join(missing), file=sys.stderr)
+            sys.exit(1)
+        with open('/tmp/agentschat-release.jks', 'wb') as f:
+            f.write(base64.b64decode(os.environ['AGENTSCHAT_KEYSTORE_B64']))
+        os.chmod('/tmp/agentschat-release.jks', 0o600)
+        # Export the Gradle-visible vars via /tmp/signing.env, sourced with no
+        # expansion in command text.
+        with open('/tmp/signing.env', 'w') as f:
+            f.write('export PLAY_STORE_FILE=/tmp/agentschat-release.jks\n')
+            f.write('export PLAY_STORE_PASSWORD=%s\n' % os.environ['AGENTSCHAT_KEYSTORE_PASSWORD'])
+            f.write('export PLAY_KEY_ALIAS=%s\n' % os.environ['AGENTSCHAT_KEY_ALIAS'])
+            f.write('export PLAY_KEY_PASSWORD=%s\n' % os.environ['AGENTSCHAT_KEY_PASSWORD'])
+        os.chmod('/tmp/signing.env', 0o600)
+        print('keystore + signing env ready (values not logged)')
+        PYEOF
+        python3 /tmp/signing-setup.py
+      - echo "sdk.dir=$ANDROID_HOME" > android/local.properties
+      # Install Android SDK (cached via volume)
+      - |
+        if [ ! -d "$ANDROID_HOME/cmdline-tools/latest" ]; then
+          apt-get update && apt-get install -y wget unzip > /dev/null 2>&1
+          mkdir -p $ANDROID_HOME/cmdline-tools
+          wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O /tmp/cmdline-tools.zip
+          unzip -q /tmp/cmdline-tools.zip -d $ANDROID_HOME/cmdline-tools
+          mv $ANDROID_HOME/cmdline-tools/cmdline-tools $ANDROID_HOME/cmdline-tools/latest
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-36" "build-tools;36.0.0" > /dev/null 2>&1
+        else
+          echo "Android SDK cached, skipping install"
+        fi
+      - chmod +x android/gradlew
+      # Clean stale Gradle locks from cached volumes (lesson #593)
+      - rm -rf ~/.gradle/caches/journal-1 ~/.gradle/caches/*.lock
+      # Build signed AAB — single path convention: workspace root.
+      # The guard printlns SIGNING MODE; ORG_GRADLE_PROJECT_* vars are the
+      # structurally leak-proof property channel (gradle reads them natively).
+      - |
+        set -e
+        . /tmp/signing.env
+        export ORG_GRADLE_PROJECT_PLAY_STORE_FILE="$PLAY_STORE_FILE"
+        export ORG_GRADLE_PROJECT_PLAY_STORE_PASSWORD="$PLAY_STORE_PASSWORD"
+        export ORG_GRADLE_PROJECT_PLAY_KEY_ALIAS="$PLAY_KEY_ALIAS"
+        export ORG_GRADLE_PROJECT_PLAY_KEY_PASSWORD="$PLAY_KEY_PASSWORD"
+        cd android
+        ./gradlew app:bundleRelease -x lint -x lintVitalAnalyzeRelease -x lintVitalRelease -x test --no-daemon
+        cd ..
+        AAB_PATH=$(find android/app/build/outputs/bundle/release/ -name "*.aab" | head -1)
+        if [ -z "$AAB_PATH" ]; then
+          echo "FATAL: No AAB found after bundleRelease"
+          ls -la android/app/build/outputs/bundle/release/ || true
+          exit 1
+        fi
+        echo "AAB found: $AAB_PATH ($(wc -c < "$AAB_PATH") bytes)"
+      # Upload AAB to Google Play internal track — FATAL on failure or skip
+      # (AngusSoftwareApp lesson: non-fatal handling masked a broken upload
+      # for ~10 days behind a green pipeline).
+      - |
+        set -e
+        pip3 install --quiet --break-system-packages PyJWT cryptography requests 2>&1
+        cat > /tmp/upload-play.py << 'PYEOF'
+        import base64, json, os, sys
+        from datetime import datetime, timedelta
+        import jwt, requests
+        SA_B64 = os.environ.get('GOOGLE_PLAY_SERVICE_ACCOUNT_B64', '')
+        if not SA_B64:
+            print('FATAL: GOOGLE_PLAY_SERVICE_ACCOUNT_B64 not set — Play upload secret missing', file=sys.stderr)
+            sys.exit(1)
+        KEY_FILE = json.loads(base64.b64decode(SA_B64))
+        PACKAGE = os.environ.get('PLAY_PACKAGE', 'com.angussoftware.agentschat')
+        TRACK = os.environ.get('PLAY_TRACK', 'internal')
+        TIMEOUT = 300
+        def check(r):
+            if not r.ok:
+                print(f'FAILED: {r.status_code}: {r.text}', file=sys.stderr)
+                sys.exit(1)
+        print('obtaining access token...')
+        now = datetime.now()
+        claim = {'iss': KEY_FILE['client_email'], 'scope': 'https://www.googleapis.com/auth/androidpublisher', 'aud': 'https://oauth2.googleapis.com/token', 'exp': str(int((now + timedelta(minutes=10)).timestamp())), 'iat': str(int(now.timestamp()))}
+        assertion = jwt.encode(payload=claim, key=KEY_FILE['private_key'].encode(), algorithm='RS256', headers={'alg': 'RS256', 'typ': 'JWT'})
+        r = requests.post('https://oauth2.googleapis.com/token', data={'grant_type': 'urn:ietf:params:oauth:grant-type:jwt-bearer', 'assertion': assertion}, timeout=TIMEOUT)
+        check(r)
+        token = r.json()['access_token']
+        hdrs = {'Authorization': f'Bearer {token}'}
+        print('creating edit...')
+        r = requests.post(f'https://androidpublisher.googleapis.com/androidpublisher/v3/applications/{PACKAGE}/edits', json={'expiryTimeSeconds': str(int((now + timedelta(minutes=10)).timestamp()))}, headers=hdrs, timeout=TIMEOUT)
+        check(r)
+        edit_id = r.json()['id']
+        print(f'edit_id={edit_id}')
+        print('uploading aab (bundles endpoint, media upload)...')
+        with open(os.environ['AAB_PATH'], 'rb') as f:
+            r = requests.post(f'https://androidpublisher.googleapis.com/upload/androidpublisher/v3/applications/{PACKAGE}/edits/{edit_id}/bundles', data=f.read(), headers={**hdrs, 'Content-Type': 'application/octet-stream'}, timeout=TIMEOUT)
+        check(r)
+        vc = r.json()['versionCode']
+        print(f'uploaded version_code={vc}')
+        release = {'versionCodes': [str(vc)], 'status': 'completed'}
+        tag = os.environ.get('CI_COMMIT_TAG', '')
+        if tag:
+            release['name'] = tag
+        print(f'assigning to {TRACK} track...')
+        r = requests.put(f'https://androidpublisher.googleapis.com/androidpublisher/v3/applications/{PACKAGE}/edits/{edit_id}/tracks/{TRACK}', json={'releases': [release]}, headers={**hdrs, 'Content-Type': 'application/json'}, timeout=TIMEOUT)
+        check(r)
+        print(f'assigned to {TRACK}')
+        print('committing edit...')
+        r = requests.post(f'https://androidpublisher.googleapis.com/androidpublisher/v3/applications/{PACKAGE}/edits/{edit_id}:commit', headers=hdrs, timeout=TIMEOUT)
+        check(r)
+        print(f'DONE - published {vc} to {TRACK}')
+        PYEOF
+        export AAB_PATH
+        python3 /tmp/upload-play.py
+        echo "Play Store upload and publish successful"
+        rm -f /tmp/upload-play.py /tmp/agentschat-release.jks /tmp/signing.env
+    volumes:
+      - gradle-cache-agentschat-release:/root/.gradle/caches
+      - gradle-wrapper-agentschat-release:/root/.gradle/wrapper
+      - android-sdk-agentschat-release:/opt/android-sdk
