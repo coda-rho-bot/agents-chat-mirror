@@ -26,7 +26,20 @@ steps:
       PLAY_PACKAGE: com.angussoftware.agentschat
       PLAY_TRACK: internal
     commands:
-      # JS deps first (node_modules for autolinking + codegen)
+      # JS toolchain: the fleet image is Kotlin/Gradle-only — node + bun ride a
+      # cached volume (/opt/ci-tools). Node 22 LTS + bun latest, installed once.
+      - |
+        if [ ! -x /opt/ci-tools/node/bin/node ]; then
+          mkdir -p /opt/ci-tools
+          apt-get update > /dev/null 2>&1 && apt-get install -y curl xz-utils > /dev/null 2>&1
+          curl -fsSL https://nodejs.org/dist/v22.14.0/node-v22.14.0-linux-x64.tar.xz | tar -xJ -C /opt/ci-tools
+          mv /opt/ci-tools/node-v22.14.0-linux-x64 /opt/ci-tools/node
+          curl -fsSL https://bun.sh/install | BUN_INSTALL=/opt/ci-tools/bun bash > /dev/null 2>&1
+        fi
+        export PATH=/opt/ci-tools/node/bin:/opt/ci-tools/bun/bin:$PATH
+        node --version && bun --version
+      # JS deps (node_modules for autolinking + codegen)
+      - export PATH=/opt/ci-tools/node/bin:/opt/ci-tools/bun/bin:$PATH
       - bun install --frozen-lockfile
       - mkdir -p ~/.gradle
       # Leak-proof signing setup (PR #80 pattern): keystore + credentials
@@ -80,6 +93,7 @@ steps:
         export ORG_GRADLE_PROJECT_PLAY_STORE_PASSWORD="$PLAY_STORE_PASSWORD"
         export ORG_GRADLE_PROJECT_PLAY_KEY_ALIAS="$PLAY_KEY_ALIAS"
         export ORG_GRADLE_PROJECT_PLAY_KEY_PASSWORD="$PLAY_KEY_PASSWORD"
+        export PATH=/opt/ci-tools/node/bin:/opt/ci-tools/bun/bin:$PATH
         cd android
         ./gradlew app:bundleRelease -x lint -x lintVitalAnalyzeRelease -x lintVitalRelease -x test --no-daemon
         cd ..
@@ -152,3 +166,4 @@ steps:
       - gradle-cache-agentschat-release:/root/.gradle/caches
       - gradle-wrapper-agentschat-release:/root/.gradle/wrapper
       - android-sdk-agentschat-release:/opt/android-sdk
+      - ci-tools-agentschat-release:/opt/ci-tools
