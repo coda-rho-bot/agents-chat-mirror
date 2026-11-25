@@ -19,10 +19,10 @@ steps:
         from_secret: AGENTSCHAT_KEY_ALIAS
       AGENTSCHAT_KEY_PASSWORD:
         from_secret: AGENTSCHAT_KEY_PASSWORD
-      # Play upload SA — consumed ONLY via os.environ inside upload-play.py;
-      # never expanded in shell command text (post-#287 leak-proofing).
-      GOOGLE_PLAY_SERVICE_ACCOUNT_B64:
-        from_secret: GOOGLE_PLAY_SERVICE_ACCOUNT_B64
+      # Play upload SA — rides the server WOODPECKER_ENVIRONMENT blob (machine-wide,
+      # value-first key:value; delivered to every pipeline container as an env var
+      # automatically — no from_secret, which reads only repo-level secrets).
+      # Consumed ONLY via os.environ inside upload-play.py (post-#287 leak-proofing).
       PLAY_PACKAGE: com.angussoftware.agentschat
       PLAY_TRACK: internal
     commands:
