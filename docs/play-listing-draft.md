@@ -94,7 +94,7 @@ Run your own Letta server and connect from the app. Guide and source:
 
 ## Privacy Policy URL
 
-**DECIDED + LIVE (Nov 25):** https://dl.angussoftware.dev/agentschat/privacy/
+**DECIDED + LIVE (Nov 25):** https://legal.angussoftware.com/privacy-agents-chat/
 — real static page on the established release channel (matches the
 /fuel/privacy URL pattern; content follows the data-safety answers).
 
