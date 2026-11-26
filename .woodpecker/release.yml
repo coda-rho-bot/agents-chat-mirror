@@ -23,6 +23,10 @@ steps:
       # value-first key:value; delivered to every pipeline container as an env var
       # automatically — no from_secret, which reads only repo-level secrets).
       # Consumed ONLY via os.environ inside upload-play.py (post-#287 leak-proofing).
+      # Track routing by tag suffix (default internal — the safe path):
+      #   v0.4.2-rc1 / v0.4.2-beta (any -rc/-beta/-alpha suffix) -> internal
+      #   v0.4.2 (clean vX.Y.Z tag)                                -> production
+      # Manual runs always go internal (never an accidental prod ship).
       PLAY_PACKAGE: com.angussoftware.agentschat
       PLAY_TRACK: internal
     commands:
@@ -137,7 +141,7 @@ steps:
         set -e
         pip3 install --quiet --break-system-packages PyJWT cryptography requests 2>&1
         cat > /tmp/upload-play.py << 'PYEOF'
-        import base64, json, os, sys
+        import base64, json, os, re, sys
         from datetime import datetime, timedelta
         import jwt, requests
         SA_B64 = os.environ.get('GOOGLE_PLAY_SERVICE_ACCOUNT_B64', '')
@@ -175,6 +179,16 @@ steps:
         tag = os.environ.get('CI_COMMIT_TAG', '')
         if tag:
             release['name'] = tag
+        # Track routing: clean vX.Y.Z tags promote to production; any
+        # pre-release suffix (-rc/-beta/-alpha) stays internal. Deriving
+        # from the tag keeps the pipeline's declared default (internal)
+        # authoritative for manual and unexpected runs.
+        if TRACK == 'production' or 'production' in os.environ.get('PLAY_TRACK_FORCE', ''):
+            TRACK = 'production'
+        else:
+            is_clean_tag = bool(re.fullmatch(r'v\d+\.\d+\.\d+', tag)) if tag else False
+            if is_clean_tag:
+                TRACK = 'production'
         print(f'assigning to {TRACK} track...')
         r = requests.put(f'https://androidpublisher.googleapis.com/androidpublisher/v3/applications/{PACKAGE}/edits/{edit_id}/tracks/{TRACK}', json={'releases': [release]}, headers={**hdrs, 'Content-Type': 'application/json'}, timeout=TIMEOUT)
         check(r)
