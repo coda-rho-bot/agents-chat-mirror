@@ -208,14 +208,22 @@ steps:
         # rejection, retry the release with status='draft'.
         release['status'] = 'completed'
         r = requests.put(f'https://androidpublisher.googleapis.com/androidpublisher/v3/applications/{PACKAGE}/edits/{edit_id}/tracks/{TRACK}', json={'releases': [release]}, headers={**hdrs, 'Content-Type': 'application/json'}, timeout=TIMEOUT)
-        if r.status_code == 400 and 'draft app' in r.text:
-            print('draft-app rule hit: retrying release with status=draft')
-            release['status'] = 'draft'
-            r = requests.put(f'https://androidpublisher.googleapis.com/androidpublisher/v3/applications/{PACKAGE}/edits/{edit_id}/tracks/{TRACK}', json={'releases': [release]}, headers={**hdrs, 'Content-Type': 'application/json'}, timeout=TIMEOUT)
         check(r)
         print(f'assigned to {TRACK} (release status: {release["status"]})')
         print('committing edit...')
         r = requests.post(f'https://androidpublisher.googleapis.com/androidpublisher/v3/applications/{PACKAGE}/edits/{edit_id}:commit', headers=hdrs, timeout=TIMEOUT)
+        # The draft-app rule is enforced at EDIT COMMIT, not at the tracks
+        # PUT (measured twice: pipelines 18 and 19 both accepted
+        # 'completed' at assignment and were rejected at commit with
+        # "Only releases with status draft may be created on draft app").
+        # First-ever release on a track of a draft app must be status=draft.
+        if r.status_code == 400 and 'draft app' in r.text:
+            print('draft-app rule hit at edit commit: retrying with status=draft')
+            release['status'] = 'draft'
+            r = requests.put(f'https://androidpublisher.googleapis.com/androidpublisher/v3/applications/{PACKAGE}/edits/{edit_id}/tracks/{TRACK}', json={'releases': [release]}, headers={**hdrs, 'Content-Type': 'application/json'}, timeout=TIMEOUT)
+            check(r)
+            print(f'reassigned to {TRACK} (release status: {release["status"]})')
+            r = requests.post(f'https://androidpublisher.googleapis.com/androidpublisher/v3/applications/{PACKAGE}/edits/{edit_id}:commit', headers=hdrs, timeout=TIMEOUT)
         check(r)
         print(f'DONE - published {vc} to {TRACK}')
         PYEOF
