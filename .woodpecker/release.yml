@@ -27,6 +27,11 @@ steps:
       #   v0.4.2-rc1 / v0.4.2-beta (any -rc/-beta/-alpha suffix) -> internal
       #   v0.4.2 (clean vX.Y.Z tag)                                -> production
       # Manual runs always go internal (never an accidental prod ship).
+      # PLAY_TRACK_FORCE: emergency override ONLY — a value containing
+      # 'production' sends the run to production REGARDLESS of tag shape.
+      # Use it only on Harry's explicit call during a release emergency;
+      # keep it unset otherwise. (Substring match: exact 'production' or
+      # empty — any other value must not contain that word.)
       PLAY_PACKAGE: com.angussoftware.agentschat
       PLAY_TRACK: internal
     commands:
