@@ -185,7 +185,7 @@ steps:
         check(r)
         vc = r.json()['versionCode']
         print(f'uploaded version_code={vc}')
-        release = {'versionCodes': [str(vc)], 'status': 'completed'}
+        release = {'versionCodes': [str(vc)]}
         tag = os.environ.get('CI_COMMIT_TAG', '')
         if tag:
             release['name'] = tag
@@ -200,9 +200,20 @@ steps:
             if is_clean_tag:
                 TRACK = 'production'
         print(f'assigning to {TRACK} track...')
+        # First release on a track of a draft app must land as status=draft
+        # ("Only releases with status draft may be created on draft app",
+        # INVALID_ARGUMENT 400, first v0.4.2 production fire). Once the app
+        # is released through Play Console once (production promote), the
+        # 'completed' status works. Heuristic: try completed; on the draft
+        # rejection, retry the release with status='draft'.
+        release['status'] = 'completed'
         r = requests.put(f'https://androidpublisher.googleapis.com/androidpublisher/v3/applications/{PACKAGE}/edits/{edit_id}/tracks/{TRACK}', json={'releases': [release]}, headers={**hdrs, 'Content-Type': 'application/json'}, timeout=TIMEOUT)
+        if r.status_code == 400 and 'draft app' in r.text:
+            print('draft-app rule hit: retrying release with status=draft')
+            release['status'] = 'draft'
+            r = requests.put(f'https://androidpublisher.googleapis.com/androidpublisher/v3/applications/{PACKAGE}/edits/{edit_id}/tracks/{TRACK}', json={'releases': [release]}, headers={**hdrs, 'Content-Type': 'application/json'}, timeout=TIMEOUT)
         check(r)
-        print(f'assigned to {TRACK}')
+        print(f'assigned to {TRACK} (release status: {release["status"]})')
         print('committing edit...')
         r = requests.post(f'https://androidpublisher.googleapis.com/androidpublisher/v3/applications/{PACKAGE}/edits/{edit_id}:commit', headers=hdrs, timeout=TIMEOUT)
         check(r)
