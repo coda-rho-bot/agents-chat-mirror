@@ -8,8 +8,6 @@ import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { useEffect, useRef } from "react";
 import { AppState } from "react-native";
-import AsyncStorage from "@react-native-async-storage/async-storage";
-import { checkForUpdate, setPendingUpdate } from "../lib/updater";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import * as Notifications from "expo-notifications";
 
@@ -42,42 +40,6 @@ function BackgroundPollingLifecycle() {
     return () => sub.remove();
   }, [activeProfile]);
 
-  return null;
-}
-
-const UPDATE_CHECK_KEY = "letta.update.lastCheck";
-const UPDATE_CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000; // 4h
-
-/**
- * Checks for app updates on foreground, at most every 4h. Result is surfaced
- * through a module-level listener (the profile screen banner subscribes).
- */
-function UpdateCheckLifecycle() {
-  useEffect(() => {
-    let cancelled = false;
-    const run = async () => {
-      try {
-        const last = Number((await AsyncStorage.getItem(UPDATE_CHECK_KEY)) ?? 0);
-        if (Date.now() - last < UPDATE_CHECK_INTERVAL_MS) return;
-        const result = await checkForUpdate();
-        if (cancelled) return;
-        if (result.updateAvailable) {
-          setPendingUpdate({ version: result.manifest!.version, manifest: result.manifest! });
-        }
-        await AsyncStorage.setItem(UPDATE_CHECK_KEY, String(Date.now()));
-      } catch {
-        // Update checks are best-effort; never disturb the user.
-      }
-    };
-    void run();
-    const sub = AppState.addEventListener("change", (state) => {
-      if (state === "active") void run();
-    });
-    return () => {
-      cancelled = true;
-      sub.remove();
-    };
-  }, []);
   return null;
 }
 
@@ -147,7 +109,6 @@ export default function RootLayout() {
       <ThemeProvider>
         <ProfilesProvider>
           <BackgroundPollingLifecycle />
-      <UpdateCheckLifecycle />
           <BottomSheetModalProvider>
             <ThemedStack />
           </BottomSheetModalProvider>

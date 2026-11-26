@@ -93,23 +93,28 @@ steps:
         else
           echo "Android SDK cached, skipping install"
         fi
-      # Generate the android tree: only 3 files are force-tracked (build.gradle,
-      # manifest, file_paths); the full tree is prebuild-generated, never committed.
+      # Generate the android tree: only 2 files are force-tracked (build.gradle,
+      # manifest); the full tree is prebuild-generated, never committed.
       # Prebuild regenerates build.gradle from the Expo template — WITHOUT the PR #90
-      # signing guard — and the manifest WITHOUT our FileProvider + install permission
-      # (the updater machinery). Restore ALL THREE tracked files: the tracked build.gradle
-      # is the gate-cleared artifact (guard + printlns + versionCode 400 + 0.4.0-ls.1 =
+      # signing guard — and the manifest WITHOUT our deep links (the updater
+      # machinery incl. FileProvider + install permission is REMOVED; Play handles
+      # updates). Restore BOTH tracked files: the tracked build.gradle
+      # is the gate-cleared artifact (guard + printlns + versionCode =
       # the single source of release-version truth; bump in the repo, not in a regex).
       # Prebuild failure is FATAL, loud: this step generates the entire build tree.
       - |
         set -e
         export PATH=/opt/ci-tools/node/bin:/opt/ci-tools/bun/bin:$PATH
         npx expo prebuild --platform android --no-install || { echo "FATAL: expo prebuild failed" >&2; exit 1; }
-        git checkout -- android/app/build.gradle android/app/src/main/AndroidManifest.xml android/app/src/main/res/xml/file_paths.xml
+        git checkout -- android/app/build.gradle android/app/src/main/AndroidManifest.xml
         # CANARY: the guard must be present in the restored file. If the tracked
         # build.gradle ever loses the guard, abort BEFORE any build/upload — the
         # first debug-keyed artifact Google sees can bind the upload identity.
         grep -q "SIGNING MODE: release keystore" android/app/build.gradle || { echo "FATAL: signing guard missing from build.gradle" >&2; exit 1; }
+        # CANARY: the install permission must STAY absent. Prebuild regenerates
+        # the manifest from app.json — if the updater permission ever reappears
+        # (plugin regression, manifest regeneration), abort before upload.
+        ! grep -q "REQUEST_INSTALL_PACKAGES" android/app/src/main/AndroidManifest.xml || { echo "FATAL: REQUEST_INSTALL_PACKAGES reappeared in manifest" >&2; exit 1; }
       - chmod +x android/gradlew
       # Clean stale Gradle locks from cached volumes (lesson #593)
       - rm -rf ~/.gradle/caches/journal-1 ~/.gradle/caches/*.lock
