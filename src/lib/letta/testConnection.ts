@@ -3,7 +3,7 @@
  * profile can be saved (docs/design-doc.md §4.1).
  *
  * Cloud: an authenticated REST call to the Letta API.
- * Remote: a WebSocket upgrade to the app-server control channel. React
+ * Remote: a WebSocket upgrade to the app-server. React
  * Native's WebSocket accepts headers via its third argument, so the
  * capability token rides the upgrade request like the SDK's Node path.
  */
@@ -60,7 +60,6 @@ function testRemote(wsUrl: string, token: string): Promise<TestResult> {
         detail: "Use a ws:// or wss:// URL.",
       });
     }
-    target.searchParams.set("channel", "control");
   } catch {
     return Promise.resolve({ ok: false, reason: "invalid_url", detail: "That URL doesn't look valid." });
   }
